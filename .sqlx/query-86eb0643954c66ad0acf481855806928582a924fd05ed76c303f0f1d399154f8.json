@@ -1,0 +1,39 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into messages\n               (mail_account_id, jmap_email_id, blob_id, message_id_hdr, thread_id,\n                received_at, size, has_attachments, from_addr, subject,\n                mailbox_ids, keywords)\n           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)\n           on conflict (mail_account_id, jmap_email_id) do update\n               set blob_id = excluded.blob_id,\n                   mailbox_ids = excluded.mailbox_ids,\n                   keywords = excluded.keywords\n           returning id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Int8",
+        "Bool",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "86eb0643954c66ad0acf481855806928582a924fd05ed76c303f0f1d399154f8"
+}

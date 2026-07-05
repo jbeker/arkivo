@@ -1,0 +1,257 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, mail_account_id, jmap_email_id, blob_id, message_id_hdr, thread_id,\n                  received_at, size, has_attachments, from_addr, subject, mailbox_ids,\n                  keywords, maildir_path, fetched_at, indexed_at, index_status,\n                  pipeline_version, error, deleted_at\n           from messages\n           where mail_account_id = $1 and maildir_path is null and deleted_at is null\n           order by id limit $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "mail_account_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "mail_account_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "jmap_email_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "jmap_email_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "blob_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "blob_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "message_id_hdr",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "message_id_hdr"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "thread_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "thread_id"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "received_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "received_at"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "size",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "size"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "has_attachments",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "has_attachments"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "from_addr",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "from_addr"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "subject",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "subject"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "mailbox_ids",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "mailbox_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "keywords",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "keywords"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "maildir_path",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "maildir_path"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "fetched_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "fetched_at"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "indexed_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "indexed_at"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "index_status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "index_status"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "pipeline_version",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "pipeline_version"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "error"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "deleted_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "deleted_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "f847a65865a195fa59a8378912e4d5944a6e6b76c87072ca62d515ca3def5ee7"
+}

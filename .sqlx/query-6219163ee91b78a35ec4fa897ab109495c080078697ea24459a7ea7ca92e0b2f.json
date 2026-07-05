@@ -1,0 +1,77 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into users (handle, role) values ($1, $2)\n           returning id, handle, role, created_at, disabled_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "handle",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "handle"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "role",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "disabled_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "disabled_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "6219163ee91b78a35ec4fa897ab109495c080078697ea24459a7ea7ca92e0b2f"
+}

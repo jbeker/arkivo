@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update mcp_tokens set revoked_at = now()\n           where id = $1 and user_id = $2 and revoked_at is null",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "204aacd093da4698dbf4f0392e8efc96575e5a6c1670a61084dca5955373bbcb"
+}

@@ -1,0 +1,90 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into mcp_tokens (user_id, token_hash, label)\n           values ($1, $2, $3)\n           returning id, user_id, label, created_at, last_used_at, revoked_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "label",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "label"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "last_used_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "last_used_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "revoked_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "revoked_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bytea",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "fc31ba3e529f6edce9df62cbd112bc1ba1b4830684504b323842ccb2a94fa230"
+}

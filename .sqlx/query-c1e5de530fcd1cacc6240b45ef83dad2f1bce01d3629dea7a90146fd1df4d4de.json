@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update jmap_state set email_state = $2, updated_at = now()\n           where mail_account_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c1e5de530fcd1cacc6240b45ef83dad2f1bce01d3629dea7a90146fd1df4d4de"
+}

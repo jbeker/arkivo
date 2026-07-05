@@ -1,0 +1,113 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, kind, mail_account_id, status, started_at, finished_at, stats, error\n           from jobs where mail_account_id = $1\n           order by started_at desc limit $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "mail_account_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "mail_account_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "started_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "finished_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "finished_at"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "stats",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "stats"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "error"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "ed589c6010a2304d1419fcc3bc6320f81bcaea99e0224e48caf93c273e8d95e1"
+}

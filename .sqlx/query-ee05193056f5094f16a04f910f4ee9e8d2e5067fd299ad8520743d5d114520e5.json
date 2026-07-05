@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update messages\n           set indexed_at = now(), index_status = 'indexed',\n               pipeline_version = $2, error = null\n           where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ee05193056f5094f16a04f910f4ee9e8d2e5067fd299ad8520743d5d114520e5"
+}

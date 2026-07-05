@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into jobs (kind, mail_account_id) values ($1, $2) returning id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fc6f8ab1770da35bbda3e07fe6b92ada7c0a77fb1edbd036a79aa5dbbfb5a922"
+}

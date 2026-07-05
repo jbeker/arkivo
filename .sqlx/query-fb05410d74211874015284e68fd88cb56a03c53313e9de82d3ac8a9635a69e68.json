@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists(\n               select 1 from messages\n               where mail_account_id = $1 and message_id_hdr = $2\n                 and id <> $3 and index_status = 'indexed'\n           ) as \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "fb05410d74211874015284e68fd88cb56a03c53313e9de82d3ac8a9635a69e68"
+}

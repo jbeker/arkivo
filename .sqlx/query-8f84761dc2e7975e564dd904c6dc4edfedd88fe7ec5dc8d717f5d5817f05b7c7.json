@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update mail_accounts set account_id = $2 where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8f84761dc2e7975e564dd904c6dc4edfedd88fe7ec5dc8d717f5d5817f05b7c7"
+}

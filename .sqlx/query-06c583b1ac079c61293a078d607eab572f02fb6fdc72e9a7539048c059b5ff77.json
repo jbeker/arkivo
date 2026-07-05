@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, user_id, label, created_at, last_used_at, revoked_at\n           from mcp_tokens where user_id = $1 order by id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "label",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "label"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "last_used_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "last_used_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "revoked_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "revoked_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "06c583b1ac079c61293a078d607eab572f02fb6fdc72e9a7539048c059b5ff77"
+}

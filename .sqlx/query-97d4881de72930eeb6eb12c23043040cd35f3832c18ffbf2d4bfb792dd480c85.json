@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update messages set maildir_path = $2, fetched_at = now() where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "97d4881de72930eeb6eb12c23043040cd35f3832c18ffbf2d4bfb792dd480c85"
+}

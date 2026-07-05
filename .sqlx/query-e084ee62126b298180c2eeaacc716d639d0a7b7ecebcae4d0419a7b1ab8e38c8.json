@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update mcp_tokens t\n           set last_used_at = now()\n           from users u\n           where t.token_hash = $1\n             and t.revoked_at is null\n             and u.id = t.user_id\n             and u.disabled_at is null\n           returning t.id, t.user_id, t.label, t.created_at, t.last_used_at, t.revoked_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "label",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "label"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "last_used_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "last_used_at"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "revoked_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mcp_tokens",
+            "name": "revoked_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "e084ee62126b298180c2eeaacc716d639d0a7b7ecebcae4d0419a7b1ab8e38c8"
+}
