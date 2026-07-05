@@ -127,20 +127,21 @@ fn default_recency_cutoff_days() -> u32 {
 
 impl AppConfig {
     /// Load from `path` (optional TOML file) overlaid with environment.
-    pub fn load(path: Option<&Path>) -> Result<Self, figment::Error> {
+    pub fn load(path: Option<&Path>) -> anyhow::Result<Self> {
         let mut figment = Figment::new();
         if let Some(path) = path {
             figment = figment.merge(Toml::file_exact(path));
         } else {
             figment = figment.merge(Toml::file("arkivo.toml"));
         }
-        figment
+        Ok(figment
             .merge(Env::prefixed("ARKIVO_").split("__"))
-            .extract()
+            .extract()?)
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::result_large_err)] // figment::Jail closures return figment::Error by contract
 mod tests {
     use super::*;
 
@@ -188,7 +189,7 @@ mod tests {
     #[test]
     fn missing_required_field_is_an_error() {
         figment::Jail::expect_with(|jail| {
-            jail.create_file("arkivo.toml", "database_url = \"postgres://x\"\n");
+            jail.create_file("arkivo.toml", "database_url = \"postgres://x\"\n")?;
             assert!(AppConfig::load(None).is_err());
             Ok(())
         });
