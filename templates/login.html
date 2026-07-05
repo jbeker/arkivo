@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Sign in</h2>
+  <input id="login-handle" placeholder="handle" autocomplete="username webauthn">
+  <button onclick="doLogin()">Sign in with passkey</button>
+  <p id="login-msg"></p>
+</div>
+
+<div class="card">
+  <h2>Register (invite required)</h2>
+  <input id="reg-invite" placeholder="invite code">
+  <input id="reg-handle" placeholder="choose a handle">
+  <button onclick="doRegister()">Create account with passkey</button>
+  <p id="reg-msg"></p>
+</div>
+
+<div class="card">
+  <h2>Recover access</h2>
+  <input id="rec-handle" placeholder="handle">
+  <input id="rec-code" placeholder="recovery code">
+  <button onclick="doRecover()">Enroll new passkey</button>
+  <p id="rec-msg"></p>
+</div>
+{% endblock %}

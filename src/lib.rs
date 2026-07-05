@@ -12,5 +12,6 @@ pub mod promote;
 pub mod sanitize;
 pub mod search;
 pub mod telemetry;
+pub mod web;
 
 pub use config::AppConfig;

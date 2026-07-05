@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select webauthn_uuid from users where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "webauthn_uuid",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "webauthn_uuid"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "48ba8146b6ce4ab32206d0d27d682bdde812a289e7310a4ce79a2f5083c0842a"
+}

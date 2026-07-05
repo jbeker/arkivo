@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.103"
+askama = "0.16.0"
 async-trait = "0.1.89"
 axum = "0.8.9"
 chacha20poly1305 = "0.11.0"
@@ -18,7 +19,7 @@ http = "1.4.2"
 mail-parser = "0.11.4"
 rand = "0.10.2"
 regex = "1.12.4"
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "stream", "http2", "charset"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "stream", "http2", "charset", "cookies"] }
 rmcp = { version = "2.1.0", features = ["server", "transport-streamable-http-server"] }
 schemars = "1.2.1"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -26,11 +27,15 @@ serde_json = "1.0.150"
 sha2 = "0.11.0"
 sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "chrono", "uuid", "json"] }
 thiserror = "2.0.18"
+time = "0.3.53"
 tokio = { version = "1.52.3", features = ["full"] }
+tower-sessions = "0.15.0"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 uuid = { version = "1.23.4", features = ["v4", "serde"] }
+webauthn-rs = { version = "0.5.5", features = ["danger-allow-state-serialisation"] }
 
 [dev-dependencies]
 figment = { version = "0.10.19", features = ["toml", "env", "test"] }
 tempfile = "3.27.0"
+webauthn-authenticator-rs = { version = "0.5.5", features = ["softtoken"] }

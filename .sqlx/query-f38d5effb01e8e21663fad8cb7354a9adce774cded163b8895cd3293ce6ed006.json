@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update invites set consumed_at = now(), consumed_by = $2\n           where id = $1 and consumed_at is null and expires_at > now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f38d5effb01e8e21663fad8cb7354a9adce774cded163b8895cd3293ce6ed006"
+}

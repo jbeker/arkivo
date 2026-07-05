@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from sessions where expiry_unix < extract(epoch from now())::bigint",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "2174ab42dc0538385960049f9f32e48cfb4cd9eb216fe74f35678f9909be56db"
+}

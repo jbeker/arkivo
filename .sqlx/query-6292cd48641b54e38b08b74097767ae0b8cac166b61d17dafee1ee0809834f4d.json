@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from passkeys\n           where id = $1 and user_id = $2\n             and (select count(*) from passkeys where user_id = $2) > 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6292cd48641b54e38b08b74097767ae0b8cac166b61d17dafee1ee0809834f4d"
+}

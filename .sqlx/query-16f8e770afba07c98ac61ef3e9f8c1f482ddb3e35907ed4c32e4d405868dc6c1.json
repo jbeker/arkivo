@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update passkeys set passkey = $2, last_used_at = now() where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "16f8e770afba07c98ac61ef3e9f8c1f482ddb3e35907ed4c32e4d405868dc6c1"
+}

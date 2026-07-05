@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into sessions (id, data, expiry_unix) values ($1, $2, $3)\n               on conflict (id) do update set data = excluded.data,\n                                              expiry_unix = excluded.expiry_unix",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fa542a04b64a995927bc1043eddc69edc77f090b07496618807ac3dfed200053"
+}

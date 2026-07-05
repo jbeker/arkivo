@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select data, expiry_unix from sessions\n               where id = $1 and expiry_unix >= extract(epoch from now())::bigint",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "data",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "data"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "expiry_unix",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "expiry_unix"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9fed0c7d1947c523c717623d7151bf496edfa5d50c29eab07e302a4e562fc4c1"
+}

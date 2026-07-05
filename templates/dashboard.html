@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block content %}
+<p>Signed in as <strong>{{ handle }}</strong>
+  {% if is_admin %}(admin){% endif %}
+  <button onclick="doLogout()">Sign out</button></p>
+
+<div class="card">
+  <h2>Mail accounts</h2>
+  <div id="accounts"></div>
+  <h3>Add Fastmail account</h3>
+  <input id="acct-url" placeholder="JMAP session URL" value="https://api.fastmail.com/jmap/session" size="45">
+  <input id="acct-token" placeholder="read-only API token" type="password" size="30">
+  <button onclick="addAccount()">Add account</button>
+  <p id="acct-msg"></p>
+</div>
+
+<div class="card">
+  <h2>MCP tokens</h2>
+  <div id="tokens"></div>
+  <input id="token-label" placeholder="label (e.g. laptop-agent)">
+  <button onclick="mintToken()">Mint token</button>
+  <p id="token-msg"></p>
+</div>
+
+<div class="card">
+  <h2>Passkeys</h2>
+  <div id="passkeys"></div>
+  <button onclick="addPasskey()">Add a passkey for this account</button>
+  <p id="passkey-msg"></p>
+</div>
+
+<div class="card">
+  <h2>Recent access (audit log)</h2>
+  <div id="audit"></div>
+</div>
+
+{% if is_admin %}
+<div class="card">
+  <h2>Admin: users</h2>
+  <div id="admin-users"></div>
+  <select id="invite-role"><option value="user">user</option><option value="admin">admin</option></select>
+  <button onclick="createInvite()">Create invite</button>
+  <p id="invite-msg"></p>
+  <h3>System health</h3>
+  <div id="admin-health"></div>
+</div>
+{% endif %}
+{% endblock %}
+{% block script %}
+<script>loadDashboard({% if is_admin %}true{% else %}false{% endif %});</script>
+{% endblock %}

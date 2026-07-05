@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select role from invites where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "role",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "role"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1bdde75b990752b913209f93f367fbf41e29bce46794924aa9ff37e612f4878e"
+}
