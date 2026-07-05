@@ -115,6 +115,40 @@ pub fn app(state: WebState) -> Router {
 
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        .route(
+            "/readyz",
+            get({
+                let pool = state.pool.clone();
+                move || {
+                    let pool = pool.clone();
+                    async move {
+                        match sqlx::query("select 1").execute(&pool).await {
+                            Ok(_) => (StatusCode::OK, "ready"),
+                            Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "db down"),
+                        }
+                    }
+                }
+            }),
+        )
+        .route(
+            // JSON counters for Zabbix HTTP-agent items (spec §15).
+            "/metrics",
+            get({
+                let pool = state.pool.clone();
+                move || {
+                    let pool = pool.clone();
+                    async move {
+                        match crate::metrics::gather(&pool).await {
+                            Ok(value) => axum::Json(value).into_response(),
+                            Err(e) => {
+                                tracing::error!(error = %format!("{e:#}"), "metrics failed");
+                                (StatusCode::INTERNAL_SERVER_ERROR, "metrics error").into_response()
+                            }
+                        }
+                    }
+                }
+            }),
+        )
         .merge(passkeys::router())
         .merge(pages::public_router())
         .merge(authed)

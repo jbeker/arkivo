@@ -2,3 +2,4 @@
 arkivo.toml
 *.key
 .env
+docker/secrets/

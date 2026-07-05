@@ -52,6 +52,29 @@ pub enum Command {
     Bootstrap(bootstrap::Args),
 }
 
+/// Resolve `--account N` / `--all` into a concrete id list for the
+/// batch subcommands.
+pub async fn resolve_account_ids(
+    config: &AppConfig,
+    account: Option<i64>,
+    all: bool,
+) -> Result<Vec<i64>> {
+    if let Some(id) = account {
+        return Ok(vec![id]);
+    }
+    anyhow::ensure!(all, "pass --account <id> or --all");
+    let pool = crate::db::connect(&config.database_url).await?;
+    let ids = sqlx::query_scalar!(
+        r#"select a.id from mail_accounts a
+           join users u on u.id = a.user_id
+           where u.disabled_at is null
+           order by a.id"#
+    )
+    .fetch_all(&pool)
+    .await?;
+    Ok(ids)
+}
+
 pub async fn run(cli: Cli) -> Result<()> {
     let config = AppConfig::load(cli.config.as_deref())?;
     match cli.command {

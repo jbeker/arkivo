@@ -1,0 +1,32 @@
+# Arkivo configuration. Every key can also be set via ARKIVO_* env vars
+# (double underscore for nesting: ARKIVO_OPENSEARCH__URL).
+
+database_url = "postgres://arkivo:arkivo@localhost:5432/arkivo"
+maildir_root = "./data/mail"
+# 32 bytes, hex-encoded — seals Fastmail tokens at rest. Keep out of git.
+master_key_path = "./data/master.key"
+
+[opensearch]
+url = "http://localhost:9200"
+# username = "admin"
+# password = "..."
+
+[embedding]
+url = "http://localhost:11434"
+model = "nomic-embed-text"
+dimension = 768
+num_ctx = 4096
+
+[web]
+bind = "127.0.0.1:8080"
+# Must equal the effective domain the browser sees, or WebAuthn fails.
+rp_id = "localhost"
+rp_origin = "http://localhost:8080"
+
+[mcp]
+bind = "127.0.0.1:8081"
+# allowed_hosts = ["arkivo.example.com"]  # empty disables Host checks
+
+[defaults]
+recency_cutoff_days = 7
+deletion_policy = "retain"  # or "mirror"

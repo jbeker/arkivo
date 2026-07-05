@@ -1,0 +1,102 @@
+# Production deployment (spec §14). TLS termination happens in front of
+# arkivo-web and arkivo-mcp (reverse proxy not included here).
+name: arkivo
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: arkivo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: arkivo
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arkivo"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  opensearch:
+    image: opensearchproject/opensearch:2.19.1
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true" # not exposed outside the compose network
+      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+    volumes:
+      - os-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+  arkivo-web:
+    image: arkivo:latest
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    command: ["serve-web"]
+    environment: &arkivo-env
+      ARKIVO_DATABASE_URL: postgres://arkivo:${POSTGRES_PASSWORD}@postgres/arkivo
+      ARKIVO_MAILDIR_ROOT: /data/mail
+      ARKIVO_MASTER_KEY_PATH: /run/secrets/master_key
+      ARKIVO_OPENSEARCH__URL: http://opensearch:9200
+      ARKIVO_EMBEDDING__URL: ${OLLAMA_URL:?set in .env, e.g. http://host:11434}
+      ARKIVO_WEB__BIND: 0.0.0.0:8080
+      ARKIVO_WEB__RP_ID: ${RP_ID:?e.g. arkivo.example.com}
+      ARKIVO_WEB__RP_ORIGIN: ${RP_ORIGIN:?e.g. https://arkivo.example.com}
+      ARKIVO_MCP__BIND: 0.0.0.0:8081
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - maildir:/data/mail
+    secrets:
+      - master_key
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+
+  arkivo-mcp:
+    image: arkivo:latest
+    restart: unless-stopped
+    command: ["serve-mcp"]
+    environment: *arkivo-env
+    ports:
+      - "127.0.0.1:8081:8081"
+    secrets:
+      - master_key
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+
+  arkivo-worker:
+    image: arkivo:latest
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/supercronic", "/etc/arkivo/crontab"]
+    environment: *arkivo-env
+    volumes:
+      - maildir:/data/mail
+    secrets:
+      - master_key
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+
+secrets:
+  master_key:
+    file: ./secrets/master.key
+
+volumes:
+  pg-data:
+  os-data:
+  maildir:

@@ -1,0 +1,4 @@
+# Worker schedule (spec §7.4/§7.5). Poll frequency does not drive search
+# freshness — the recency cutoff does — so these cadences are relaxed.
+*/30 * * * * arkivo --log-json poll --all
+15 * * * * arkivo --log-json promote --all

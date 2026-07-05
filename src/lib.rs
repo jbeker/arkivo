@@ -8,6 +8,7 @@ pub mod extract;
 pub mod jmap;
 pub mod maildir;
 pub mod mcp;
+pub mod metrics;
 pub mod promote;
 pub mod sanitize;
 pub mod search;
