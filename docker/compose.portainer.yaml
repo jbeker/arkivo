@@ -1,0 +1,125 @@
+# Arkivo — Portainer stack.
+#
+# Fill in via Portainer's "Environment variables" panel (or edit inline):
+#   POSTGRES_PASSWORD   database password (pick something long and random)
+#   ARKIVO_IMAGE        the image to run (build it once on the host with
+#                       `docker build -f docker/Dockerfile -t arkivo:latest .`
+#                       or point at your registry copy)
+#   MASTER_KEY_FILE     host path to the 32-byte hex master key, e.g. /opt/arkivo/master.key
+#                       create it once:  head -c 32 /dev/urandom | xxd -p -c 64 > /opt/arkivo/master.key
+#
+# Before first start, on the Docker host (OpenSearch requirement):
+#   sysctl -w vm.max_map_count=262144   (persist in /etc/sysctl.d/)
+#
+# Reverse proxy (TLS terminates there) routes:
+#   https://arkivo.example.com/          -> this host:8480  (web UI)
+#   https://arkivo.example.com/mcp       -> this host:8481  (MCP; keep the /mcp path)
+# If your proxy shares a Docker network with this stack, you can drop the
+# `ports:` sections and target arkivo-web:8080 / arkivo-mcp:8081 directly.
+#
+# First run: open https://arkivo.example.com — the UI offers one-time
+# "create first admin" setup. Everything after (account, token, backfill)
+# happens in the browser.
+
+name: arkivo
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: arkivo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: arkivo
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arkivo"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  opensearch:
+    image: opensearchproject/opensearch:2.19.1
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      # Not exposed outside the stack network; auth adds nothing here.
+      DISABLE_SECURITY_PLUGIN: "true"
+      # Size to your box; 1g is fine to start, raise for a 50GB corpus.
+      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+    volumes:
+      - os-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+  arkivo-web:
+    image: ${ARKIVO_IMAGE:-arkivo:latest}
+    restart: unless-stopped
+    command: ["serve-web"]
+    environment: &arkivo-env
+      ARKIVO_DATABASE_URL: postgres://arkivo:${POSTGRES_PASSWORD}@postgres/arkivo
+      ARKIVO_MAILDIR_ROOT: /data/mail
+      ARKIVO_MASTER_KEY_PATH: /etc/arkivo/master.key
+      ARKIVO_OPENSEARCH__URL: http://opensearch:9200
+      ARKIVO_EMBEDDING__URL: https://ollama.example.com
+      ARKIVO_WEB__BIND: 0.0.0.0:8080
+      # WebAuthn is strict about these: they must match the public URL
+      # the browser sees, exactly.
+      ARKIVO_WEB__RP_ID: arkivo.example.com
+      ARKIVO_WEB__RP_ORIGIN: https://arkivo.example.com
+      ARKIVO_MCP__BIND: 0.0.0.0:8081
+      # Host-header allowlist for the MCP service (requests arrive with
+      # the public hostname via the proxy).
+      ARKIVO_MCP__ALLOWED_HOSTS: '["arkivo.example.com"]'
+    ports:
+      - "8480:8080"
+    volumes:
+      - maildir:/data/mail
+      - ${MASTER_KEY_FILE:?set MASTER_KEY_FILE, e.g. /opt/arkivo/master.key}:/etc/arkivo/master.key:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+
+  arkivo-mcp:
+    image: ${ARKIVO_IMAGE:-arkivo:latest}
+    restart: unless-stopped
+    command: ["serve-mcp"]
+    environment: *arkivo-env
+    ports:
+      - "8481:8081"
+    volumes:
+      - ${MASTER_KEY_FILE}:/etc/arkivo/master.key:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+
+  # Scheduled poll + promote (see docker/crontab in the image). Manual
+  # runs are also available per account from the web dashboard.
+  arkivo-worker:
+    image: ${ARKIVO_IMAGE:-arkivo:latest}
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/supercronic", "/etc/arkivo/crontab"]
+    environment: *arkivo-env
+    volumes:
+      - maildir:/data/mail
+      - ${MASTER_KEY_FILE}:/etc/arkivo/master.key:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+
+volumes:
+  # Back up pg-data and maildir; os-data is derived and rebuildable
+  # from the web UI's reindex button.
+  pg-data:
+  os-data:
+  maildir:
