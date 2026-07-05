@@ -2,9 +2,10 @@
 #
 # Fill in via Portainer's "Environment variables" panel (or edit inline):
 #   POSTGRES_PASSWORD   database password (pick something long and random)
-#   ARKIVO_IMAGE        the image to run (build it once on the host with
-#                       `docker build -f docker/Dockerfile -t arkivo:latest .`
-#                       or point at your registry copy)
+#   ARKIVO_IMAGE        optional override; defaults to the registry image
+#                       registry.example.com/arkivo:latest. Pin a build
+#                       with a SHA tag (e.g. :959de55) for controlled rollouts.
+#                       Publish images with scripts/build-and-push.sh.
 #   MASTER_KEY_FILE     host path to the 32-byte hex master key, e.g. /opt/arkivo/master.key
 #                       create it once:  head -c 32 /dev/urandom | xxd -p -c 64 > /opt/arkivo/master.key
 #
@@ -57,7 +58,7 @@ services:
       retries: 20
 
   arkivo-web:
-    image: ${ARKIVO_IMAGE:-arkivo:latest}
+    image: ${ARKIVO_IMAGE:-registry.example.com/arkivo:latest}
     restart: unless-stopped
     command: ["serve-web"]
     environment: &arkivo-env
@@ -87,7 +88,7 @@ services:
         condition: service_healthy
 
   arkivo-mcp:
-    image: ${ARKIVO_IMAGE:-arkivo:latest}
+    image: ${ARKIVO_IMAGE:-registry.example.com/arkivo:latest}
     restart: unless-stopped
     command: ["serve-mcp"]
     environment: *arkivo-env
@@ -104,7 +105,7 @@ services:
   # Scheduled poll + promote (see docker/crontab in the image). Manual
   # runs are also available per account from the web dashboard.
   arkivo-worker:
-    image: ${ARKIVO_IMAGE:-arkivo:latest}
+    image: ${ARKIVO_IMAGE:-registry.example.com/arkivo:latest}
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/supercronic", "/etc/arkivo/crontab"]
     environment: *arkivo-env
