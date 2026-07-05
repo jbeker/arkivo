@@ -14,6 +14,7 @@ use crate::db::{accounts, audit, messages};
 use crate::jmap::types::Email;
 use crate::jmap::{JmapClient, JmapError};
 use crate::maildir::MessageStore;
+use crate::search::SearchClient;
 
 #[derive(Debug, Default, serde::Serialize)]
 pub struct SyncStats {
@@ -67,9 +68,12 @@ pub async fn ingest_email(
 }
 
 /// Apply one destroyed ID per the account's deletion policy (spec §7.6).
+/// `search` is optional so credential-free test paths can skip index
+/// cleanup; production polling always passes it.
 async fn apply_destroyed(
     pool: &PgPool,
     store: &dyn MessageStore,
+    search: Option<&SearchClient>,
     mail_account_id: i64,
     user_id: i64,
     jmap_email_id: &str,
@@ -99,6 +103,9 @@ async fn apply_destroyed(
                     Err(_) => {}
                 }
             }
+            if let Some(search) = search {
+                search.delete_message_docs(user_id, msg.id).await?;
+            }
             messages::delete_row(pool, msg.id).await?;
             audit::record(
                 pool,
@@ -126,6 +133,7 @@ pub async fn poll_account(
     pool: &PgPool,
     client: &JmapClient,
     store: &dyn MessageStore,
+    search: Option<&SearchClient>,
     account: &accounts::MailAccount,
     policy: DeletionPolicy,
 ) -> Result<SyncStats> {
@@ -148,7 +156,7 @@ pub async fn poll_account(
                     account = account.id,
                     "state too old; falling back to full resync"
                 );
-                let resync = resync_account(pool, client, store, account, policy).await?;
+                let resync = resync_account(pool, client, store, search, account, policy).await?;
                 stats.fetched += resync.fetched;
                 stats.destroyed += resync.destroyed;
                 stats.resynced = true;
@@ -168,6 +176,7 @@ pub async fn poll_account(
             apply_destroyed(
                 pool,
                 store,
+                search,
                 account.id,
                 account.user_id,
                 destroyed_id,
@@ -196,6 +205,7 @@ pub async fn resync_account(
     pool: &PgPool,
     client: &JmapClient,
     store: &dyn MessageStore,
+    search: Option<&SearchClient>,
     account: &accounts::MailAccount,
     policy: DeletionPolicy,
 ) -> Result<SyncStats> {
@@ -224,7 +234,16 @@ pub async fn resync_account(
     }
 
     for gone in local_ids.difference(&server_ids) {
-        apply_destroyed(pool, store, account.id, account.user_id, gone, policy).await?;
+        apply_destroyed(
+            pool,
+            store,
+            search,
+            account.id,
+            account.user_id,
+            gone,
+            policy,
+        )
+        .await?;
         stats.destroyed += 1;
     }
 

@@ -21,12 +21,14 @@ pub async fn run(config: AppConfig, args: Args) -> Result<()> {
     };
 
     let ctx = AccountContext::open(&config, args.account).await?;
+    let search = crate::search::SearchClient::new(&config.opensearch)?;
     let job_id = jobs::start(&ctx.pool, "poll", Some(ctx.account.id)).await?;
 
     let result = poll_account(
         &ctx.pool,
         &ctx.client,
         &ctx.maildir,
+        Some(&search),
         &ctx.account,
         ctx.deletion_policy(),
     )

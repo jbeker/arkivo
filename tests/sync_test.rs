@@ -70,7 +70,7 @@ async fn run_poll(
     h: &Harness,
     policy: DeletionPolicy,
 ) -> arkivo::jmap::sync::SyncStats {
-    poll_account(pool, &h.client, &h.maildir, &h.account, policy)
+    poll_account(pool, &h.client, &h.maildir, None, &h.account, policy)
         .await
         .unwrap()
 }
@@ -247,6 +247,7 @@ async fn state_not_advanced_when_write_fails_and_retry_has_no_duplicates(pool: P
         &pool,
         &h.client,
         &failing,
+        None,
         &h.account,
         DeletionPolicy::Retain,
     )
