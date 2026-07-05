@@ -25,6 +25,19 @@ pub struct Hit {
     pub source: Value,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum FacetKind {
+    From,
+    Mailbox,
+    Year,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FacetBucket {
+    pub value: String,
+    pub count: i64,
+}
+
 impl SearchClient {
     pub fn new(config: &OpenSearchConfig) -> Result<Self> {
         Ok(Self {
@@ -267,6 +280,55 @@ impl SearchClient {
             )
             .await?;
         Ok(Self::parse_hits(&value, "message_id"))
+    }
+
+    /// Facet aggregation over the message index (spec §9 list_facets):
+    /// top senders, mailbox distribution, or per-year message counts.
+    pub async fn facets(
+        &self,
+        user_id: i64,
+        kind: FacetKind,
+        size: usize,
+    ) -> Result<Vec<FacetBucket>> {
+        let index = mappings::msg_index_name(user_id);
+        let aggs = match kind {
+            FacetKind::From => json!({"f": {"terms": {"field": "from.raw", "size": size}}}),
+            FacetKind::Mailbox => json!({"f": {"terms": {"field": "mailbox_ids", "size": size}}}),
+            FacetKind::Year => json!({"f": {
+                "date_histogram": {
+                    "field": "received_at",
+                    "calendar_interval": "year",
+                    "format": "yyyy",
+                    "min_doc_count": 1,
+                }
+            }}),
+        };
+        let value = self
+            .send_json(
+                Method::POST,
+                &format!("/{index}/_search"),
+                Some(&json!({"size": 0, "aggs": aggs})),
+            )
+            .await?;
+        let buckets = value
+            .pointer("/aggregations/f/buckets")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        Ok(buckets
+            .iter()
+            .filter_map(|b| {
+                let key = b
+                    .get("key_as_string")
+                    .and_then(Value::as_str)
+                    .map(String::from)
+                    .or_else(|| b.get("key").and_then(Value::as_str).map(String::from))?;
+                Some(FacetBucket {
+                    value: key,
+                    count: b.get("doc_count").and_then(Value::as_i64).unwrap_or(0),
+                })
+            })
+            .collect())
     }
 
     pub async fn get_msg_doc(&self, user_id: i64, message_id: i64) -> Result<Option<Value>> {

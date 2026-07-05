@@ -71,12 +71,18 @@ impl Default for WebConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct McpConfig {
     pub bind: String,
+    /// Host/authority allowlist for inbound requests (DNS-rebinding
+    /// guard). Empty disables the check — appropriate behind the TLS
+    /// terminator the spec places in front of this service.
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
 }
 
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
             bind: "127.0.0.1:8081".into(),
+            allowed_hosts: Vec::new(),
         }
     }
 }
