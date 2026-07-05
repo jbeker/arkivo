@@ -7,6 +7,7 @@ use crate::config::AppConfig;
 
 mod backfill;
 mod bootstrap;
+pub mod context;
 mod migrate;
 mod poll;
 mod promote;

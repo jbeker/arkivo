@@ -26,3 +26,4 @@ uuid = { version = "1.23.4", features = ["v4", "serde"] }
 
 [dev-dependencies]
 figment = { version = "0.10.19", features = ["toml", "env", "test"] }
+tempfile = "3.27.0"

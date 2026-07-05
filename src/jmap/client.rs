@@ -278,6 +278,22 @@ impl JmapClient {
         })
     }
 
+    /// The server's current Email state, via an empty Email/get — used to
+    /// bracket a backfill or resync sweep before it starts.
+    pub async fn email_state_now(&self) -> Result<String, JmapError> {
+        let responses = self
+            .call(json!([
+                ["Email/get", {
+                    "accountId": self.account_id,
+                    "ids": [],
+                }, "s0"],
+            ]))
+            .await?;
+        let got: EmailGetResponse = serde_json::from_value(Self::response_args(&responses, "s0")?)
+            .map_err(|e| JmapError::Protocol(e.to_string()))?;
+        Ok(got.state)
+    }
+
     /// Fetch metadata for explicit IDs, batched by the server's
     /// maxObjectsInGet ceiling.
     pub async fn email_get(&self, ids: &[String]) -> Result<Vec<Email>, JmapError> {

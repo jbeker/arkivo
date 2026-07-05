@@ -4,6 +4,7 @@ pub mod config;
 pub mod crypto;
 pub mod db;
 pub mod jmap;
+pub mod maildir;
 pub mod telemetry;
 
 pub use config::AppConfig;
