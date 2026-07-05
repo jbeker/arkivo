@@ -18,16 +18,22 @@ scoped, and fully audit-logged.
 
 One binary, several subcommands:
 
+Everything is operable from the web interface: first-run admin setup,
+adding a Fastmail account (the token is validated live, then sealed),
+starting/cancelling the initial backfill with progress, manual
+poll/promote/reindex, MCP tokens, and status. The CLI subcommands exist
+for automation (the worker container's cron uses them) and as a fallback:
+
 | Subcommand   | Role |
 |--------------|------|
-| `bootstrap`  | Mint the first admin invite (passkey-only auth bootstrap) |
-| `migrate`    | Apply database migrations |
-| `backfill`   | Seed the archive from Fastmail (resumable; `--limit`, `--since`) |
-| `poll`       | Incremental JMAP sync (`--account N` or `--all`) |
-| `promote`    | Move aged messages through sanitization into the index |
-| `reindex`    | Rebuild the search index from the Maildir (`--recreate` for mapping changes) |
 | `serve-web`  | Web administration UI (WebAuthn passkeys only) |
 | `serve-mcp`  | Read-only MCP search server (bearer tokens) |
+| `poll`       | Incremental JMAP sync (`--account N` or `--all`) — cron entry point |
+| `promote`    | Move aged messages through sanitization into the index — cron entry point |
+| `backfill`   | Seed the archive from Fastmail (resumable; `--limit`, `--since`) |
+| `reindex`    | Rebuild the search index from the Maildir (`--recreate` for mapping changes) |
+| `migrate`    | Apply database migrations (also runs at serve-web startup) |
+| `bootstrap`  | Mint an admin invite from the CLI (fallback; the web UI offers first-run setup) |
 
 ## Development
 
@@ -55,23 +61,25 @@ RP_ID=arkivo.example.com
 RP_ORIGIN=https://arkivo.example.com
 EOF
 docker compose up -d
-docker compose run --rm arkivo-web bootstrap   # prints the admin invite
 ```
 
 Put a TLS-terminating reverse proxy in front of ports 8080 (web) and
 8081 (MCP). WebAuthn requires a secure context: `RP_ID`/`RP_ORIGIN`
 must match the public domain exactly.
 
-First archive: register at `/login` with the invite, add your Fastmail
-account (read-only API token) in the dashboard, then run the initial
-backfill (multi-hour for large mailboxes; resumable — safe to interrupt):
+Everything else happens in the browser:
 
-```sh
-docker compose run --rm arkivo-web backfill --account 1 --limit 500  # smoke test
-docker compose run --rm arkivo-web backfill --account 1             # full run
-```
+1. Open the web UI — with no users yet, it offers **first-run setup**:
+   create the first admin with a passkey (no invite needed; the flow
+   closes permanently once a user exists).
+2. Add your Fastmail account (read-only API token). The token is
+   validated against the server before it is sealed and stored.
+3. Press **start backfill** — optionally with a message limit as a
+   smoke test first. Progress is shown live; the job is cancellable and
+   resumable (multi-hour for large mailboxes; interruptions are safe).
 
-The worker container polls and promotes on a schedule (`docker/crontab`).
+The worker container polls and promotes on a schedule (`docker/crontab`);
+the same jobs can be triggered manually per account from the dashboard.
 Mint an MCP token in the dashboard and point your agent at
 `https://arkivo.example.com:.../mcp` with `Authorization: Bearer <token>`.
 

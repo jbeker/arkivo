@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update jobs set cancel_requested_at = now() where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8ce2e36fd67da49b5bf14db298efac04b3dc969fecc5433e5ace9778971f8dd4"
+}

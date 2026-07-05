@@ -25,6 +25,7 @@ pub async fn run(config: AppConfig, _args: Args) -> Result<()> {
         search: Arc::new(SearchClient::new(&config.opensearch)?),
         embedding_url: config.embedding.url.clone(),
         defaults: config.defaults.clone(),
+        config: config.clone(),
     };
 
     let listener = tokio::net::TcpListener::bind(&config.web.bind).await?;

@@ -23,7 +23,11 @@ pub fn router() -> Router<WebState> {
             "/api/accounts/{id}",
             delete(remove_account).patch(update_account),
         )
-        .route("/api/accounts/{id}/reindex", post(trigger_reindex))
+        .route("/api/accounts/{id}/backfill", post(start_backfill))
+        .route("/api/accounts/{id}/poll", post(start_poll))
+        .route("/api/accounts/{id}/promote", post(start_promote))
+        .route("/api/accounts/{id}/reindex", post(start_reindex))
+        .route("/api/jobs/{id}/cancel", post(cancel_job))
         .route("/api/tokens", post(mint_token).get(list_tokens))
         .route("/api/tokens/{id}", delete(revoke_token))
         .route("/api/passkeys", get(list_passkeys))
@@ -96,11 +100,120 @@ async fn status(
             })).collect::<Vec<_>>(),
         }));
     }
+    let running_jobs = jobs::running_for_user(&state.pool, user.id)
+        .await
+        .unwrap_or_default();
     Json(json!({
         "user": {"handle": user.handle, "role": user.role},
         "accounts": out,
+        "running_jobs": running_jobs.iter().map(|j| json!({
+            "job_id": j.id, "kind": j.kind, "account_id": j.mail_account_id,
+            "started_at": j.started_at, "stats": j.stats,
+        })).collect::<Vec<_>>(),
     }))
     .into_response()
+}
+
+/// Validate ownership, then take the lock + jobs row synchronously and
+/// spawn the long-running work. 202 with the job id, 409 when a job of
+/// the same family already holds the account.
+async fn spawn_job(
+    state: &WebState,
+    user_id: i64,
+    account_id: i64,
+    kind: crate::ops::JobKind,
+) -> Response {
+    let Some(account) = (match owned_account(state, user_id, account_id).await {
+        Ok(a) => a,
+        Err(r) => return r,
+    }) else {
+        return not_found();
+    };
+    match crate::ops::try_start(&state.config, &state.pool, account.id, kind).await {
+        Ok(Some(started)) => {
+            let job_id = started.job_id;
+            crate::ops::spawn_detached(state.config.clone(), state.pool.clone(), started);
+            (StatusCode::ACCEPTED, Json(json!({"job_id": job_id}))).into_response()
+        }
+        Ok(None) => (
+            StatusCode::CONFLICT,
+            "a conflicting job is already running for this account",
+        )
+            .into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct StartBackfill {
+    /// Optional cap for smoke-test runs.
+    limit: Option<u64>,
+}
+
+async fn start_backfill(
+    State(state): State<WebState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<i64>,
+    body: Option<Json<StartBackfill>>,
+) -> Response {
+    let limit = body.and_then(|Json(b)| b.limit);
+    spawn_job(
+        &state,
+        user.id,
+        id,
+        crate::ops::JobKind::Backfill { limit, since: None },
+    )
+    .await
+}
+
+async fn start_poll(
+    State(state): State<WebState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<i64>,
+) -> Response {
+    spawn_job(&state, user.id, id, crate::ops::JobKind::Poll).await
+}
+
+async fn start_promote(
+    State(state): State<WebState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<i64>,
+) -> Response {
+    spawn_job(&state, user.id, id, crate::ops::JobKind::Promote).await
+}
+
+#[derive(Deserialize, Default)]
+struct StartReindex {
+    #[serde(default)]
+    recreate: bool,
+}
+
+async fn start_reindex(
+    State(state): State<WebState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<i64>,
+    body: Option<Json<StartReindex>>,
+) -> Response {
+    let recreate = body.map(|Json(b)| b.recreate).unwrap_or(false);
+    spawn_job(
+        &state,
+        user.id,
+        id,
+        crate::ops::JobKind::Reindex { recreate },
+    )
+    .await
+}
+
+async fn cancel_job(
+    State(state): State<WebState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<i64>,
+) -> Response {
+    match jobs::request_cancel(&state.pool, id, user.id).await {
+        Ok(true) => Json(json!({"ok": true})).into_response(),
+        Ok(false) => not_found(),
+        Err(e) => internal(e),
+    }
 }
 
 #[derive(Deserialize)]
@@ -115,9 +228,36 @@ async fn add_account(
     Extension(CurrentUser(user)): Extension<CurrentUser>,
     Json(body): Json<AddAccount>,
 ) -> Response {
-    if !body.jmap_session_url.starts_with("https://") {
-        return (StatusCode::BAD_REQUEST, "session URL must be https").into_response();
+    // Homelab dev setups may use plain http; production sits behind TLS.
+    if !body.jmap_session_url.starts_with("https://")
+        && !body.jmap_session_url.starts_with("http://")
+    {
+        return (StatusCode::BAD_REQUEST, "session URL must be http(s)").into_response();
     }
+
+    // Validate the credential against the server before sealing: a bad
+    // token should fail here with a clear message, not at first poll.
+    let client = match crate::jmap::JmapClient::connect(
+        &body.jmap_session_url,
+        &body.token,
+        crate::jmap::RetryPolicy {
+            max_retries: 1,
+            base_delay: std::time::Duration::from_millis(500),
+        },
+    )
+    .await
+    {
+        Ok(client) => client,
+        Err(e) => {
+            tracing::warn!(error = %e, "account validation failed");
+            return (
+                StatusCode::BAD_REQUEST,
+                "could not connect: the server rejected the token or the URL is unreachable",
+            )
+                .into_response();
+        }
+    };
+
     let sealed = match state.sealer.seal(body.token.as_bytes()) {
         Ok(sealed) => sealed,
         Err(e) => return internal(e),
@@ -131,7 +271,11 @@ async fn add_account(
     )
     .await
     {
-        Ok(account) => (StatusCode::CREATED, Json(json!({"id": account.id}))).into_response(),
+        Ok(account) => {
+            let _ =
+                accounts::set_jmap_account_id(&state.pool, account.id, client.account_id()).await;
+            (StatusCode::CREATED, Json(json!({"id": account.id}))).into_response()
+        }
         Err(e) => internal(e),
     }
 }
@@ -201,25 +345,6 @@ async fn remove_account(
     };
     match accounts::delete(&state.pool, account.id).await {
         Ok(()) => Json(json!({"ok": true})).into_response(),
-        Err(e) => internal(e),
-    }
-}
-
-/// Manual reindex (spec §12): restage everything; the scheduled promote
-/// pass rebuilds the index from the canonical store.
-async fn trigger_reindex(
-    State(state): State<WebState>,
-    Extension(CurrentUser(user)): Extension<CurrentUser>,
-    Path(id): Path<i64>,
-) -> Response {
-    let Some(account) = (match owned_account(&state, user.id, id).await {
-        Ok(a) => a,
-        Err(r) => return r,
-    }) else {
-        return not_found();
-    };
-    match messages::reset_index_state(&state.pool, account.id).await {
-        Ok(restaged) => Json(json!({"restaged": restaged})).into_response(),
         Err(e) => internal(e),
     }
 }

@@ -1,13 +1,21 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="card">
+<div class="card" id="setup-card" style="display:none">
+  <h2>First-run setup</h2>
+  <p>No accounts exist yet. Create the first administrator with a passkey.</p>
+  <input id="setup-handle" placeholder="choose an admin handle">
+  <button onclick="doSetup()">Create first admin</button>
+  <p id="setup-msg"></p>
+</div>
+
+<div class="card auth-card">
   <h2>Sign in</h2>
   <input id="login-handle" placeholder="handle" autocomplete="username webauthn">
   <button onclick="doLogin()">Sign in with passkey</button>
   <p id="login-msg"></p>
 </div>
 
-<div class="card">
+<div class="card auth-card">
   <h2>Register (invite required)</h2>
   <input id="reg-invite" placeholder="invite code">
   <input id="reg-handle" placeholder="choose a handle">
@@ -15,11 +23,14 @@
   <p id="reg-msg"></p>
 </div>
 
-<div class="card">
+<div class="card auth-card">
   <h2>Recover access</h2>
   <input id="rec-handle" placeholder="handle">
   <input id="rec-code" placeholder="recovery code">
   <button onclick="doRecover()">Enroll new passkey</button>
   <p id="rec-msg"></p>
 </div>
+{% endblock %}
+{% block script %}
+<script>initLoginPage();</script>
 {% endblock %}

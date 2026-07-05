@@ -1,6 +1,9 @@
 //! Web service tests: full WebAuthn ceremonies driven in-process by the
-//! softtoken authenticator (no browser), invite/recovery lifecycles,
-//! role enforcement, and MCP token management via the API.
+//! softtoken authenticator (no browser), first-run setup mode,
+//! invite/recovery lifecycles, role enforcement, and MCP token
+//! management via the API.
+
+mod support;
 
 use std::sync::Arc;
 
@@ -33,20 +36,34 @@ impl WebHarness {
             .rp_name("Arkivo Test")
             .build()
             .unwrap();
+        let opensearch = OpenSearchConfig {
+            url: "http://localhost:1".into(), // health checks may fail; fine
+            username: None,
+            password: None,
+        };
+        let config = arkivo::config::AppConfig {
+            database_url: String::new(), // job spawning not exercised here
+            maildir_root: std::env::temp_dir().join("arkivo-web-test"),
+            master_key_path: std::env::temp_dir().join("arkivo-web-test.key"),
+            opensearch: opensearch.clone(),
+            embedding: arkivo::config::EmbeddingConfig {
+                url: "http://localhost:1".into(),
+                model: "nomic-embed-text".into(),
+                dimension: 768,
+                num_ctx: 4096,
+            },
+            web: Default::default(),
+            mcp: Default::default(),
+            defaults: UserDefaults::default(),
+        };
         let state = WebState {
             pool,
             webauthn: Arc::new(webauthn),
             sealer: Arc::new(Sealer::new(&[7u8; 32], "primary").unwrap()),
-            search: Arc::new(
-                SearchClient::new(&OpenSearchConfig {
-                    url: "http://localhost:1".into(), // health checks may fail; fine
-                    username: None,
-                    password: None,
-                })
-                .unwrap(),
-            ),
+            search: Arc::new(SearchClient::new(&opensearch).unwrap()),
             embedding_url: "http://localhost:1".into(),
             defaults: UserDefaults::default(),
+            config,
         };
         tokio::spawn(async move {
             axum::serve(listener, app(state)).await.unwrap();
@@ -397,4 +414,128 @@ async fn token_mint_and_revoke_via_api(pool: PgPool) {
         .await
         .unwrap();
     assert!(resolved.is_none());
+}
+
+/// Setup ceremony: same two legs as registration, no invite.
+async fn run_setup(
+    h: &WebHarness,
+    client: &reqwest::Client,
+    authenticator: &mut WebauthnAuthenticator<SoftToken>,
+    handle: &str,
+) -> u16 {
+    let response = client
+        .post(format!("{}/auth/setup/start", h.base))
+        .json(&json!({"handle": handle}))
+        .send()
+        .await
+        .unwrap();
+    if !response.status().is_success() {
+        return response.status().as_u16();
+    }
+    let ccr: CreationChallengeResponse = response.json().await.unwrap();
+    let credential = authenticator
+        .do_registration(h.origin.clone(), ccr)
+        .unwrap();
+    let response = client
+        .post(format!("{}/auth/setup/finish", h.base))
+        .json(&credential)
+        .send()
+        .await
+        .unwrap();
+    response.status().as_u16()
+}
+
+async fn setup_needed(h: &WebHarness, client: &reqwest::Client) -> bool {
+    let v: Value = client
+        .get(format!("{}/auth/setup-needed", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    v["needed"].as_bool().unwrap()
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn first_run_setup_creates_admin_then_closes(pool: PgPool) {
+    let h = WebHarness::start(pool.clone()).await;
+    let client = h.client();
+
+    // Fresh install: setup offered.
+    assert!(setup_needed(&h, &client).await);
+
+    // First admin created via ceremony, session established.
+    let mut authenticator = softtoken();
+    assert_eq!(
+        run_setup(&h, &client, &mut authenticator, "root").await,
+        200
+    );
+    let user = users::get_by_handle(&pool, "root").await.unwrap().unwrap();
+    assert!(user.is_admin());
+    let response = client
+        .get(format!("{}/api/admin/users", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status().as_u16(),
+        200,
+        "setup admin has an admin session"
+    );
+
+    // The window is closed permanently.
+    let fresh = h.client();
+    assert!(!setup_needed(&h, &fresh).await);
+    assert_eq!(
+        run_setup(&h, &fresh, &mut softtoken(), "intruder").await,
+        400
+    );
+
+    // Normal invite-gated registration still works afterwards.
+    let invite = make_invite(&pool, "user").await;
+    let client2 = h.client();
+    assert_eq!(
+        h.register(&client2, &mut softtoken(), &invite, "alice")
+            .await,
+        200
+    );
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn add_account_validates_token_before_sealing(pool: PgPool) {
+    let h = WebHarness::start(pool.clone()).await;
+    let client = h.client();
+    let invite = make_invite(&pool, "user").await;
+    h.register(&client, &mut softtoken(), &invite, "alice")
+        .await;
+
+    let fake = support::fake_jmap::FakeJmap::start().await;
+
+    // Wrong token: rejected with a clear message, nothing stored.
+    let response = client
+        .post(format!("{}/api/accounts", h.base))
+        .json(&json!({"jmap_session_url": fake.session_url(), "token": "wrong-token"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 400);
+
+    // Correct token: accepted, JMAP account id captured.
+    let response = client
+        .post(format!("{}/api/accounts", h.base))
+        .json(&json!({"jmap_session_url": fake.session_url(), "token": fake.token()}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 201);
+    let body: Value = response.json().await.unwrap();
+    let account = arkivo::db::accounts::get(&pool, body["id"].as_i64().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        account.account_id.as_deref(),
+        Some(support::fake_jmap::ACCOUNT_ID)
+    );
 }

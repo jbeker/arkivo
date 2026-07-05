@@ -85,6 +85,27 @@ async function registrationCeremony(startPath, startBody, finishPath) {
 
 // ---- login page -------------------------------------------------------------
 
+async function initLoginPage() {
+  try {
+    const r = await api("/auth/setup-needed", undefined, "GET");
+    if (r.needed) {
+      document.getElementById("setup-card").style.display = "";
+      document.querySelectorAll(".auth-card").forEach((el) => (el.style.display = "none"));
+    }
+  } catch (e) { console.error(e); }
+}
+
+async function doSetup() {
+  try {
+    await registrationCeremony(
+      "/auth/setup/start",
+      { handle: document.getElementById("setup-handle").value },
+      "/auth/setup/finish",
+    );
+    location.href = "/";
+  } catch (e) { msg("setup-msg", e.message, false); }
+}
+
 async function doLogin() {
   try {
     const handle = document.getElementById("login-handle").value;
@@ -151,21 +172,90 @@ async function loadDashboard(isAdmin) {
   ]).catch((e) => console.error(e));
 }
 
+let refreshTimer = null;
+
+function jobProgress(job) {
+  const s = job.stats || {};
+  if (job.kind === "backfill") {
+    const total = s.total ? ` / ~${s.total}` : "";
+    return `backfill running \u2014 ${s.fetched ?? 0}${total} fetched (page ${s.pages ?? 0})`;
+  }
+  if (job.kind === "promote" || job.kind === "reindex") {
+    return `${job.kind} running \u2014 ${s.promoted ?? 0} promoted, ${s.failed ?? 0} failed`;
+  }
+  return `${job.kind} running\u2026`;
+}
+
 async function refreshStatus() {
   const status = await api("/api/status", undefined, "GET");
-  const rows = status.accounts.map((a) => [
-    a.id,
-    esc(a.jmap_session_url),
-    `${a.counts.indexed}/${a.counts.total} indexed, ${a.counts.staged} staged, ` +
-      `${a.counts.quarantined} quarantined, ${a.counts.failed} failed, ${a.counts.unfetched} unfetched`,
-    a.backfill_done ? "backfill done" : "backfill pending",
-    `cutoff ${a.recency_cutoff_days}d / ${esc(a.deletion_policy)}`,
-    `<button onclick="reindexAccount(${a.id})">reindex</button>
-     <button onclick="removeAccount(${a.id})">remove</button>`,
-  ]);
+  const runningByAccount = {};
+  (status.running_jobs || []).forEach((j) => {
+    (runningByAccount[j.account_id] ||= []).push(j);
+  });
+
+  const rows = status.accounts.map((a) => {
+    const running = runningByAccount[a.id] || [];
+    const progress = running
+      .map((j) => `${jobProgress(j)} <button onclick="cancelJob(${j.job_id})">cancel</button>`)
+      .join("<br>");
+    const actions = running.length
+      ? progress
+      : `<button onclick="startBackfill(${a.id})">${a.backfill_done ? "re-run backfill" : "start backfill"}</button>
+         <button onclick="startJob(${a.id}, 'poll')">poll now</button>
+         <button onclick="startJob(${a.id}, 'promote')">promote now</button>
+         <button onclick="startJob(${a.id}, 'reindex')">reindex</button>
+         <button onclick="removeAccount(${a.id})">remove</button>`;
+    return [
+      a.id,
+      esc(a.jmap_session_url),
+      `${a.counts.indexed}/${a.counts.total} indexed, ${a.counts.staged} staged, ` +
+        `${a.counts.quarantined} quarantined, ${a.counts.failed} failed, ${a.counts.unfetched} unfetched`,
+      a.backfill_done ? "backfill done" : "backfill pending",
+      `cutoff ${a.recency_cutoff_days}d / ${esc(a.deletion_policy)}`,
+      actions,
+    ];
+  });
   document.getElementById("accounts").innerHTML =
-    rows.length ? table(rows, ["id", "session URL", "messages", "backfill", "config", ""])
+    rows.length ? table(rows, ["id", "session URL", "messages", "backfill", "config", "actions"])
                 : "<p>No accounts yet.</p>";
+
+  // Auto-refresh while anything is running; stop when idle.
+  const busy = (status.running_jobs || []).length > 0;
+  if (busy && !refreshTimer) {
+    refreshTimer = setInterval(refreshStatus, 5000);
+  } else if (!busy && refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
+async function startBackfill(id) {
+  const answer = prompt(
+    "Message limit for a smoke test, or leave empty for a full backfill " +
+    "(can run for hours; cancellable and resumable):", "");
+  if (answer === null) return;
+  const body = answer.trim() ? { limit: parseInt(answer, 10) } : {};
+  try {
+    await api(`/api/accounts/${id}/backfill`, body);
+    msg("acct-msg", "backfill started", true);
+  } catch (e) { msg("acct-msg", e.message, false); }
+  refreshStatus();
+}
+
+async function startJob(id, kind) {
+  try {
+    await api(`/api/accounts/${id}/${kind}`, {});
+    msg("acct-msg", `${kind} started`, true);
+  } catch (e) { msg("acct-msg", e.message, false); }
+  refreshStatus();
+}
+
+async function cancelJob(jobId) {
+  try {
+    await api(`/api/jobs/${jobId}/cancel`, {});
+    msg("acct-msg", "cancel requested \u2014 the job stops at the next page boundary", true);
+  } catch (e) { msg("acct-msg", e.message, false); }
+  refreshStatus();
 }
 
 async function addAccount() {
@@ -175,7 +265,7 @@ async function addAccount() {
       token: document.getElementById("acct-token").value,
     });
     document.getElementById("acct-token").value = "";
-    msg("acct-msg", "account added — run backfill from the CLI to seed it", true);
+    msg("acct-msg", "account added — press “start backfill” to import it", true);
     refreshStatus();
   } catch (e) { msg("acct-msg", e.message, false); }
 }
@@ -183,12 +273,6 @@ async function addAccount() {
 async function removeAccount(id) {
   if (!confirm(`Remove account ${id}? The Maildir on disk is kept.`)) return;
   await api(`/api/accounts/${id}`, undefined, "DELETE");
-  refreshStatus();
-}
-
-async function reindexAccount(id) {
-  const r = await api(`/api/accounts/${id}/reindex`, {});
-  msg("acct-msg", `${r.restaged} messages restaged; next promote run rebuilds the index`, true);
   refreshStatus();
 }
 

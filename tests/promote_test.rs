@@ -148,9 +148,17 @@ async fn cutoff_boundary_is_exact(pool: PgPool) {
         .await
         .unwrap();
 
-    let stats = promote_account(&pool, &fx.maildir, &search, &embedder, &clock, &fx.account)
-        .await
-        .unwrap();
+    let stats = promote_account(
+        &pool,
+        &fx.maildir,
+        &search,
+        &embedder,
+        &clock,
+        &fx.account,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(stats.promoted, 1, "only the message past the cutoff");
 
     let recent_row = messages::get(&pool, too_recent).await.unwrap().unwrap();
@@ -160,9 +168,17 @@ async fn cutoff_boundary_is_exact(pool: PgPool) {
 
     // Advance the clock past the boundary: the recent one promotes.
     clock.advance(Duration::seconds(2));
-    let stats = promote_account(&pool, &fx.maildir, &search, &embedder, &clock, &fx.account)
-        .await
-        .unwrap();
+    let stats = promote_account(
+        &pool,
+        &fx.maildir,
+        &search,
+        &embedder,
+        &clock,
+        &fx.account,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(stats.promoted, 1);
 
     search
@@ -189,14 +205,30 @@ async fn promotion_is_idempotent(pool: PgPool) {
     )
     .await;
 
-    let first = promote_account(&pool, &fx.maildir, &search, &embedder, &clock, &fx.account)
-        .await
-        .unwrap();
+    let first = promote_account(
+        &pool,
+        &fx.maildir,
+        &search,
+        &embedder,
+        &clock,
+        &fx.account,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(first.promoted, 1);
 
-    let second = promote_account(&pool, &fx.maildir, &search, &embedder, &clock, &fx.account)
-        .await
-        .unwrap();
+    let second = promote_account(
+        &pool,
+        &fx.maildir,
+        &search,
+        &embedder,
+        &clock,
+        &fx.account,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(second.promoted, 0, "second run must be a no-op");
 
     search
@@ -223,9 +255,17 @@ async fn reset_links_are_redacted_in_index(pool: PgPool) {
     )
     .await;
 
-    promote_account(&pool, &fx.maildir, &search, &embedder, &clock, &fx.account)
-        .await
-        .unwrap();
+    promote_account(
+        &pool,
+        &fx.maildir,
+        &search,
+        &embedder,
+        &clock,
+        &fx.account,
+        None,
+    )
+    .await
+    .unwrap();
     search
         .refresh_user_indices(fx.account.user_id)
         .await
@@ -285,9 +325,17 @@ async fn quarantined_sender_never_reaches_index(pool: PgPool) {
     )
     .await;
 
-    let stats = promote_account(&pool, &fx.maildir, &search, &embedder, &clock, &fx.account)
-        .await
-        .unwrap();
+    let stats = promote_account(
+        &pool,
+        &fx.maildir,
+        &search,
+        &embedder,
+        &clock,
+        &fx.account,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(stats.promoted, 1);
     assert_eq!(stats.quarantined, 1);
 
@@ -331,9 +379,17 @@ async fn duplicate_message_id_is_not_reembedded(pool: PgPool) {
         .await
         .unwrap();
 
-    let stats = promote_account(&pool, &fx.maildir, &search, &embedder, &clock, &fx.account)
-        .await
-        .unwrap();
+    let stats = promote_account(
+        &pool,
+        &fx.maildir,
+        &search,
+        &embedder,
+        &clock,
+        &fx.account,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(stats.promoted, 1);
     assert_eq!(stats.deduped, 1);
 
@@ -371,9 +427,17 @@ async fn unreadable_blob_marks_failed_and_continues(pool: PgPool) {
         .unwrap();
     fx.maildir.remove(&path).unwrap();
 
-    let stats = promote_account(&pool, &fx.maildir, &search, &embedder, &clock, &fx.account)
-        .await
-        .unwrap();
+    let stats = promote_account(
+        &pool,
+        &fx.maildir,
+        &search,
+        &embedder,
+        &clock,
+        &fx.account,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(stats.failed, 1);
     assert_eq!(stats.promoted, 1, "healthy message still promotes");
 

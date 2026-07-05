@@ -19,6 +19,8 @@ jobs:
           POSTGRES_USER: arkivo
           POSTGRES_PASSWORD: arkivo
           POSTGRES_DB: arkivo
+          # Headroom for the parallel test suite.
+          POSTGRES_INITDB_ARGS: "-c max_connections=200"
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U arkivo"

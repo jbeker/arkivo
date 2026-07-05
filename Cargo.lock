@@ -125,6 +125,7 @@ dependencies = [
  "tower-sessions",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "webauthn-authenticator-rs",
  "webauthn-rs",

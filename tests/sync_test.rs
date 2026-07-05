@@ -59,7 +59,7 @@ fn file_count(maildir: &Maildir) -> usize {
 }
 
 async fn run_backfill(pool: &PgPool, h: &Harness, options: &BackfillOptions) -> u64 {
-    backfill_account(pool, &h.client, &h.maildir, &h.account, options)
+    backfill_account(pool, &h.client, &h.maildir, &h.account, options, None)
         .await
         .unwrap()
         .fetched
@@ -196,6 +196,7 @@ async fn backfill_pages_with_small_server_limit(pool: PgPool) {
         &h.maildir,
         &h.account,
         &BackfillOptions::default(),
+        None,
     )
     .await
     .unwrap();

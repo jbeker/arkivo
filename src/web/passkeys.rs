@@ -25,6 +25,9 @@ const LOGIN_STATE_KEY: &str = "login_state";
 
 pub fn router() -> Router<WebState> {
     Router::new()
+        .route("/auth/setup-needed", axum::routing::get(setup_needed))
+        .route("/auth/setup/start", post(setup_start))
+        .route("/auth/setup/finish", post(register_finish))
         .route("/auth/register/start", post(register_start))
         .route("/auth/register/finish", post(register_finish))
         .route("/auth/login/start", post(login_start))
@@ -61,6 +64,73 @@ struct RegContext {
     invite_id: Option<i64>,
     existing_user_id: Option<i64>,
     recovery_id: Option<i64>,
+    /// First-run setup: creates the first admin without an invite,
+    /// guarded transactionally on "no users exist yet".
+    #[serde(default)]
+    setup: bool,
+}
+
+async fn no_users_yet(state: &WebState) -> anyhow::Result<bool> {
+    let count: i64 = sqlx::query_scalar!(r#"select count(*) as "n!" from users"#)
+        .fetch_one(&state.pool)
+        .await?;
+    Ok(count == 0)
+}
+
+/// First-run probe: the login page shows the setup card iff this is true.
+async fn setup_needed(State(state): State<WebState>) -> Response {
+    match no_users_yet(&state).await {
+        Ok(needed) => Json(serde_json::json!({"needed": needed})).into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct SetupStart {
+    handle: String,
+}
+
+/// First-run setup (replaces the CLI bootstrap): while no user exists,
+/// anyone reaching the service may create the first admin. The finish
+/// leg re-checks emptiness under a table lock, so the window closes
+/// atomically with the first successful registration.
+async fn setup_start(
+    State(state): State<WebState>,
+    session: Session,
+    Json(body): Json<SetupStart>,
+) -> Response {
+    let handle = body.handle.trim().to_string();
+    if handle.is_empty() || handle.len() > 64 {
+        return bad_request("handle must be 1-64 characters");
+    }
+    match no_users_yet(&state).await {
+        Ok(true) => {}
+        Ok(false) => return bad_request("setup already completed"),
+        Err(e) => return internal(e),
+    }
+
+    let webauthn_uuid = Uuid::new_v4();
+    let (ccr, reg_state) =
+        match state
+            .webauthn
+            .start_passkey_registration(webauthn_uuid, &handle, &handle, None)
+        {
+            Ok(pair) => pair,
+            Err(e) => return internal(e),
+        };
+    let ctx = RegContext {
+        state: reg_state,
+        handle,
+        webauthn_uuid,
+        invite_id: None,
+        existing_user_id: None,
+        recovery_id: None,
+        setup: true,
+    };
+    if let Err(e) = session.insert(REG_STATE_KEY, &ctx).await {
+        return internal(e);
+    }
+    Json(ccr).into_response()
 }
 
 #[derive(Deserialize)]
@@ -104,6 +174,7 @@ async fn register_start(
         invite_id: Some(invite.id),
         existing_user_id: None,
         recovery_id: None,
+        setup: false,
     };
     if let Err(e) = session.insert(REG_STATE_KEY, &ctx).await {
         return internal(e);
@@ -137,32 +208,47 @@ async fn register_finish(
 
     let result: anyhow::Result<i64> = async {
         let mut tx = state.pool.begin().await?;
-        let user_id = match (ctx.invite_id, ctx.existing_user_id, ctx.recovery_id) {
-            // New user via invite.
-            (Some(invite_id), None, None) => {
-                let role = sqlx::query_scalar!("select role from invites where id = $1", invite_id)
-                    .fetch_one(&mut *tx)
-                    .await?;
-                let user_id =
-                    auth::create_user_with_uuid(&mut tx, &ctx.handle, &role, ctx.webauthn_uuid)
-                        .await?;
-                anyhow::ensure!(
-                    auth::consume_invite(&mut tx, invite_id, user_id).await?,
-                    "invite already consumed"
-                );
-                user_id
+        let user_id = if ctx.setup {
+            // First-run setup: serialize against concurrent attempts and
+            // re-check emptiness inside the transaction. Once any user
+            // exists this path is permanently closed.
+            sqlx::query("lock table users in exclusive mode")
+                .execute(&mut *tx)
+                .await?;
+            let existing: i64 = sqlx::query_scalar!(r#"select count(*) as "n!" from users"#)
+                .fetch_one(&mut *tx)
+                .await?;
+            anyhow::ensure!(existing == 0, "setup already completed");
+            auth::create_user_with_uuid(&mut tx, &ctx.handle, "admin", ctx.webauthn_uuid).await?
+        } else {
+            match (ctx.invite_id, ctx.existing_user_id, ctx.recovery_id) {
+                // New user via invite.
+                (Some(invite_id), None, None) => {
+                    let role =
+                        sqlx::query_scalar!("select role from invites where id = $1", invite_id)
+                            .fetch_one(&mut *tx)
+                            .await?;
+                    let user_id =
+                        auth::create_user_with_uuid(&mut tx, &ctx.handle, &role, ctx.webauthn_uuid)
+                            .await?;
+                    anyhow::ensure!(
+                        auth::consume_invite(&mut tx, invite_id, user_id).await?,
+                        "invite already consumed"
+                    );
+                    user_id
+                }
+                // Recovery: new passkey for an existing user.
+                (None, Some(user_id), Some(recovery_id)) => {
+                    anyhow::ensure!(
+                        auth::consume_recovery(&mut tx, recovery_id).await?,
+                        "recovery code already consumed"
+                    );
+                    user_id
+                }
+                // Add-passkey while signed in.
+                (None, Some(user_id), None) => user_id,
+                _ => anyhow::bail!("inconsistent registration context"),
             }
-            // Recovery: new passkey for an existing user.
-            (None, Some(user_id), Some(recovery_id)) => {
-                anyhow::ensure!(
-                    auth::consume_recovery(&mut tx, recovery_id).await?,
-                    "recovery code already consumed"
-                );
-                user_id
-            }
-            // Add-passkey while signed in.
-            (None, Some(user_id), None) => user_id,
-            _ => anyhow::bail!("inconsistent registration context"),
         };
         sqlx::query!(
             r#"insert into passkeys (user_id, credential_id, passkey, label)
@@ -355,6 +441,7 @@ async fn recover_start(
         invite_id: None,
         existing_user_id: Some(user.id),
         recovery_id: Some(recovery_id),
+        setup: false,
     };
     if let Err(e) = session.insert(REG_STATE_KEY, &ctx).await {
         return internal(e);
@@ -396,6 +483,7 @@ async fn add_passkey_start(
         invite_id: None,
         existing_user_id: Some(user.id),
         recovery_id: None,
+        setup: false,
     };
     if let Err(e) = session.insert(REG_STATE_KEY, &ctx).await {
         return internal(e);

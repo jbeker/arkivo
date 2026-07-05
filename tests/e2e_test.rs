@@ -77,6 +77,7 @@ async fn full_pipeline_backfill_promote_mcp_search(pool: PgPool) {
         &maildir,
         &account,
         &BackfillOptions::default(),
+        None,
     )
     .await
     .unwrap();
@@ -99,7 +100,7 @@ async fn full_pipeline_backfill_promote_mcp_search(pool: PgPool) {
     // --- Promote: only messages past the 7-day cutoff index -------------
     let embedder = FakeEmbedder::default();
     let clock = FakeClock::at(Utc::now());
-    let stats = promote_account(&pool, &maildir, &search, &embedder, &clock, &account)
+    let stats = promote_account(&pool, &maildir, &search, &embedder, &clock, &account, None)
         .await
         .unwrap();
     assert_eq!(stats.promoted, 2, "the two old messages");

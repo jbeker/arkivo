@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update jobs j set cancel_requested_at = now()\n           from mail_accounts a\n           where j.id = $1 and j.status = 'running'\n             and a.id = j.mail_account_id and a.user_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "670802a84eb557c53977bcba1514091a7332369672e7e9fb69ff3c38927c4b3b"
+}

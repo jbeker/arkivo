@@ -37,6 +37,9 @@ pub struct WebState {
     pub search: Arc<SearchClient>,
     pub embedding_url: String,
     pub defaults: crate::config::UserDefaults,
+    /// Full config: web-spawned jobs (backfill/poll/promote) need the
+    /// maildir root, master key path, and embedding settings.
+    pub config: AppConfig,
 }
 
 /// The session-authenticated user, injected by [`require_session`].

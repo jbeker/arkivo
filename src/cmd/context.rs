@@ -1,5 +1,7 @@
-//! Shared setup for the batch subcommands: pool, account, unsealed
-//! credential, JMAP client, and the per-account Maildir.
+//! Shared setup for the batch subcommands: account, unsealed
+//! credential, JMAP client, and the per-account Maildir. The caller's
+//! pool is borrowed, never duplicated — web-spawned jobs would exhaust
+//! Postgres connections otherwise.
 
 use anyhow::{Context, Result};
 use sqlx::PgPool;
@@ -13,16 +15,14 @@ use crate::maildir::Maildir;
 pub const SEAL_KEY_ID: &str = "primary";
 
 pub struct AccountContext {
-    pub pool: PgPool,
     pub account: MailAccount,
     pub client: JmapClient,
     pub maildir: Maildir,
 }
 
 impl AccountContext {
-    pub async fn open(config: &AppConfig, account_id: i64) -> Result<Self> {
-        let pool = crate::db::connect(&config.database_url).await?;
-        let account = crate::db::accounts::get(&pool, account_id)
+    pub async fn open(config: &AppConfig, pool: &PgPool, account_id: i64) -> Result<Self> {
+        let account = crate::db::accounts::get(pool, account_id)
             .await?
             .with_context(|| format!("mail account {account_id} not found"))?;
 
@@ -49,7 +49,6 @@ impl AccountContext {
         )?;
 
         Ok(Self {
-            pool,
             account,
             client,
             maildir,

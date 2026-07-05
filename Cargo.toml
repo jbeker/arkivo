@@ -32,6 +32,7 @@ tokio = { version = "1.52.3", features = ["full"] }
 tower-sessions = "0.15.0"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+url = "2.5.8"
 uuid = { version = "1.23.4", features = ["v4", "serde"] }
 webauthn-rs = { version = "0.5.5", features = ["danger-allow-state-serialisation"] }
 

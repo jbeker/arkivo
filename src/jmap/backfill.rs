@@ -24,6 +24,10 @@ pub struct BackfillStats {
     pub fetched: u64,
     pub pages: u64,
     pub complete: bool,
+    /// Server-reported mailbox total, from the first Email/query page.
+    pub total: Option<u64>,
+    /// Stopped early because cancellation was requested.
+    pub cancelled: bool,
 }
 
 pub struct BackfillOptions {
@@ -42,12 +46,16 @@ impl Default for BackfillOptions {
     }
 }
 
+/// `job`: when present, per-page progress is written to that jobs row
+/// and its cancel flag is honored at page boundaries (the anchor cursor
+/// makes a later run resume where a cancelled one stopped).
 pub async fn backfill_account(
     pool: &PgPool,
     client: &JmapClient,
     store: &dyn MessageStore,
     account: &accounts::MailAccount,
     options: &BackfillOptions,
+    job: Option<i64>,
 ) -> Result<BackfillStats> {
     let state = accounts::get_jmap_state(pool, account.id)
         .await?
@@ -88,9 +96,15 @@ pub async fn backfill_account(
             break;
         }
         stats.pages += 1;
+        if stats.total.is_none() {
+            stats.total = page.query.total;
+        }
 
-        let stored: Vec<bool> = stream::iter(page.emails.iter())
-            .map(|email| ingest_email(pool, client, store, account.id, email))
+        // Owned emails, not `.iter()`: a closure over `&Email` trips
+        // rustc's higher-ranked lifetime check (#89976) once this future
+        // runs under tokio::spawn for web-triggered jobs.
+        let stored: Vec<bool> = stream::iter(page.emails)
+            .map(|email| async move { ingest_email(pool, client, store, account.id, &email).await })
             .buffer_unordered(DOWNLOAD_CONCURRENCY)
             .try_collect()
             .await?;
@@ -108,6 +122,14 @@ pub async fn backfill_account(
         if (page.query.ids.len() as u64) < page_size {
             stats.complete = true;
             break;
+        }
+
+        if let Some(job_id) = job {
+            crate::db::jobs::update_stats(pool, job_id, &serde_json::to_value(&stats)?).await?;
+            if crate::db::jobs::is_cancel_requested(pool, job_id).await? {
+                stats.cancelled = true;
+                break;
+            }
         }
     }
 

@@ -1,0 +1,247 @@
+//! Per-account job orchestration shared by the CLI subcommands and the
+//! web API. Split in two phases so the web can respond immediately:
+//! [`try_start`] synchronously takes the advisory lock and creates the
+//! jobs row (returning `None` when the account is busy); [`run`] does
+//! the long work, finishes the jobs row, and releases the lock.
+
+use anyhow::{Context, Result};
+use serde_json::json;
+use sqlx::PgPool;
+
+use crate::clock::SystemClock;
+use crate::cmd::context::AccountContext;
+use crate::config::AppConfig;
+use crate::db::{accounts, jobs, locks::AdvisoryLock, messages};
+use crate::embed::OllamaEmbedder;
+use crate::jmap::backfill::{BackfillOptions, backfill_account, fetch_missing_blobs};
+use crate::jmap::sync::poll_account;
+use crate::maildir::Maildir;
+use crate::promote::promote_account;
+use crate::search::SearchClient;
+
+#[derive(Debug, Clone)]
+pub enum JobKind {
+    Backfill {
+        limit: Option<u64>,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+    },
+    Poll,
+    Promote,
+    Reindex {
+        recreate: bool,
+    },
+}
+
+impl JobKind {
+    pub fn name(&self) -> &'static str {
+        match self {
+            JobKind::Backfill { .. } => "backfill",
+            JobKind::Poll => "poll",
+            JobKind::Promote => "promote",
+            JobKind::Reindex { .. } => "reindex",
+        }
+    }
+
+    /// Advisory-lock key: backfill and poll share "sync" so they can
+    /// never interleave writes on one account; promote and reindex
+    /// share "promote".
+    fn lock_name(&self) -> &'static str {
+        match self {
+            JobKind::Backfill { .. } | JobKind::Poll => "sync",
+            JobKind::Promote | JobKind::Reindex { .. } => "promote",
+        }
+    }
+}
+
+pub struct StartedJob {
+    pub job_id: i64,
+    kind: JobKind,
+    account_id: i64,
+    lock: AdvisoryLock,
+}
+
+/// Take the lock and create the jobs row. `Ok(None)` = another job of
+/// this family is already running for the account.
+pub async fn try_start(
+    config: &AppConfig,
+    pool: &PgPool,
+    account_id: i64,
+    kind: JobKind,
+) -> Result<Option<StartedJob>> {
+    // Verify the account exists before locking.
+    accounts::get(pool, account_id)
+        .await?
+        .with_context(|| format!("mail account {account_id} not found"))?;
+    let Some(lock) =
+        AdvisoryLock::try_acquire(&config.database_url, kind.lock_name(), account_id).await?
+    else {
+        return Ok(None);
+    };
+    let job_id = jobs::start(pool, kind.name(), Some(account_id)).await?;
+    Ok(Some(StartedJob {
+        job_id,
+        kind,
+        account_id,
+        lock,
+    }))
+}
+
+/// Execute the job to completion, record the outcome, release the lock.
+pub async fn run(config: &AppConfig, pool: &PgPool, started: StartedJob) -> Result<()> {
+    let StartedJob {
+        job_id,
+        kind,
+        account_id,
+        lock,
+    } = started;
+
+    let outcome = execute(config, pool, account_id, &kind, job_id).await;
+    match &outcome {
+        Ok(Outcome::Succeeded(stats)) => {
+            jobs::succeed(pool, job_id, stats).await?;
+            tracing::info!(account = account_id, job = job_id, kind = kind.name(),
+                stats = %stats, "job complete");
+        }
+        Ok(Outcome::Cancelled(stats)) => {
+            jobs::update_stats(pool, job_id, stats).await?;
+            jobs::mark_cancelled(pool, job_id).await?;
+            tracing::info!(
+                account = account_id,
+                job = job_id,
+                kind = kind.name(),
+                "job cancelled by request"
+            );
+        }
+        Err(e) => {
+            jobs::fail(pool, job_id, &format!("{e:#}")).await?;
+        }
+    }
+    lock.release().await?;
+    outcome.map(|_| ())
+}
+
+enum Outcome {
+    Succeeded(serde_json::Value),
+    Cancelled(serde_json::Value),
+}
+
+async fn execute(
+    config: &AppConfig,
+    pool: &PgPool,
+    account_id: i64,
+    kind: &JobKind,
+    job_id: i64,
+) -> Result<Outcome> {
+    match kind {
+        JobKind::Backfill { limit, since } => {
+            let ctx = AccountContext::open(config, pool, account_id).await?;
+            let options = BackfillOptions {
+                limit: *limit,
+                since: *since,
+                ..Default::default()
+            };
+            let stats = backfill_account(
+                pool,
+                &ctx.client,
+                &ctx.maildir,
+                &ctx.account,
+                &options,
+                Some(job_id),
+            )
+            .await?;
+            if stats.cancelled {
+                return Ok(Outcome::Cancelled(serde_json::to_value(&stats)?));
+            }
+            let retried = fetch_missing_blobs(pool, &ctx.client, &ctx.maildir, account_id).await?;
+            let mut value = serde_json::to_value(&stats)?;
+            value["retried_blobs"] = json!(retried);
+            Ok(Outcome::Succeeded(value))
+        }
+        JobKind::Poll => {
+            let ctx = AccountContext::open(config, pool, account_id).await?;
+            let search = SearchClient::new(&config.opensearch)?;
+            let stats = poll_account(
+                pool,
+                &ctx.client,
+                &ctx.maildir,
+                Some(&search),
+                &ctx.account,
+                ctx.deletion_policy(),
+            )
+            .await?;
+            Ok(Outcome::Succeeded(serde_json::to_value(&stats)?))
+        }
+        JobKind::Promote | JobKind::Reindex { .. } => {
+            // No JMAP credential is unsealed on this path.
+            let account = accounts::get(pool, account_id)
+                .await?
+                .context("account vanished mid-job")?;
+            let maildir = Maildir::open_or_create(
+                config
+                    .maildir_root
+                    .join(format!("user-{}", account.user_id))
+                    .join(format!("account-{}", account.id)),
+            )?;
+            let search = SearchClient::new(&config.opensearch)?;
+            let embedder = OllamaEmbedder::new(&config.embedding)?;
+
+            if let JobKind::Reindex { recreate } = kind {
+                if *recreate {
+                    search.delete_user_indices(account.user_id).await?;
+                }
+                let restaged = messages::reset_index_state(pool, account.id).await?;
+                tracing::info!(account = account.id, restaged, "restaged for reindex");
+            }
+
+            let stats = promote_account(
+                pool,
+                &maildir,
+                &search,
+                &embedder,
+                &SystemClock,
+                &account,
+                Some(job_id),
+            )
+            .await?;
+            if stats.cancelled {
+                Ok(Outcome::Cancelled(serde_json::to_value(&stats)?))
+            } else {
+                Ok(Outcome::Succeeded(serde_json::to_value(&stats)?))
+            }
+        }
+    }
+}
+
+/// Detached execution for web-triggered jobs: logs failures instead of
+/// propagating (the jobs row carries the error for the UI).
+pub fn spawn_detached(config: AppConfig, pool: PgPool, started: StartedJob) {
+    tokio::spawn(run_owned(config, pool, started));
+}
+
+async fn run_owned(config: AppConfig, pool: PgPool, started: StartedJob) {
+    let job_id = started.job_id;
+    if let Err(e) = run(&config, &pool, started).await {
+        tracing::error!(job = job_id, error = %format!("{e:#}"), "web-spawned job failed");
+    }
+}
+
+/// CLI-shaped entry: start-or-skip, then run to completion.
+pub async fn run_blocking(
+    config: &AppConfig,
+    pool: &PgPool,
+    account_id: i64,
+    kind: JobKind,
+) -> Result<()> {
+    match try_start(config, pool, account_id, kind.clone()).await? {
+        Some(started) => run(config, pool, started).await,
+        None => {
+            tracing::info!(
+                account = account_id,
+                kind = kind.name(),
+                "another {} job is running; skipping",
+                kind.lock_name()
+            );
+            Ok(())
+        }
+    }
+}

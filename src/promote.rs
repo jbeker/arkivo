@@ -24,10 +24,14 @@ pub struct PromoteStats {
     pub deduped: u64,
     pub failed: u64,
     pub chunks: u64,
+    /// Stopped early because cancellation was requested.
+    pub cancelled: bool,
 }
 
 const BATCH: i64 = 200;
 
+/// `job`: when present, per-batch progress is written to that jobs row
+/// and its cancel flag is honored at batch boundaries.
 pub async fn promote_account(
     pool: &PgPool,
     store: &dyn MessageStore,
@@ -35,6 +39,7 @@ pub async fn promote_account(
     embedder: &dyn EmbeddingProvider,
     clock: &dyn Clock,
     account: &MailAccount,
+    job: Option<i64>,
 ) -> Result<PromoteStats> {
     let cutoff = clock.now() - Duration::days(account.recency_cutoff_days as i64);
     let policy = SanitizePolicy::from_value(account.sanitize_policy.as_ref());
@@ -60,6 +65,14 @@ pub async fn promote_account(
                     messages::mark_status(pool, msg.id, "failed", Some(&format!("{e:#}"))).await?;
                     stats.failed += 1;
                 }
+            }
+        }
+
+        if let Some(job_id) = job {
+            crate::db::jobs::update_stats(pool, job_id, &serde_json::to_value(&stats)?).await?;
+            if crate::db::jobs::is_cancel_requested(pool, job_id).await? {
+                stats.cancelled = true;
+                break;
             }
         }
     }
