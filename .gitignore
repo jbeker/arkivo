@@ -1,0 +1,4 @@
+/target
+arkivo.toml
+*.key
+.env

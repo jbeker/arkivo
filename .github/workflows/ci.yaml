@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  SQLX_OFFLINE: "true"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: arkivo
+          POSTGRES_PASSWORD: arkivo
+          POSTGRES_DB: arkivo
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U arkivo"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      opensearch:
+        image: opensearchproject/opensearch:2.19.1
+        env:
+          discovery.type: single-node
+          DISABLE_SECURITY_PLUGIN: "true"
+          OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+        ports: ["9200:9200"]
+        options: >-
+          --health-cmd "curl -sf http://localhost:9200/_cluster/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://arkivo:arkivo@localhost:5432/arkivo
+      ARKIVO_TEST_OPENSEARCH_URL: http://localhost:9200
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --all-targets
