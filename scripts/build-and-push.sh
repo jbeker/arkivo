@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # Build the Arkivo image and push it to registry.example.com.
 #
-# Safety first: any uncommitted work is committed, and the branch is
-# pushed to its remote (when one exists), BEFORE the image builds — so
-# the code that produced an image is never lost.
+# Safety first: the script never commits or pushes git for you — it
+# REFUSES to build if there are uncommitted changes or unpushed
+# commits, so every image is traceable to code that is safely in the
+# remote repository.
 #
 # Usage:
-#   scripts/build-and-push.sh                 # commit-if-dirty, push git, build, push image
+#   scripts/build-and-push.sh                 # verify git state, build, push image
 #   SKIP_PUSH=1 scripts/build-and-push.sh     # everything except the registry push (dry run)
-#
-# Requires: docker login registry.example.com (once, beforehand).
 
 set -euo pipefail
 
@@ -18,27 +17,35 @@ IMAGE="${REGISTRY}/arkivo"
 
 cd "$(dirname "$0")/.."
 
-# --- 1. Make sure the code is committed -------------------------------------
+# --- 1. Refuse to build uncommitted work -------------------------------------
 if [[ -n "$(git status --porcelain)" ]]; then
-    echo "==> Uncommitted changes found; committing a snapshot:"
-    git status --short
-    git add -A
-    git commit -m "Pre-build snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "ERROR: uncommitted changes; commit (or stash) them first:" >&2
+    git status --short >&2
+    exit 1
+fi
+echo "==> Working tree clean."
+
+# --- 2. Refuse to build unpushed work (when a remote exists) -----------------
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+if git remote get-url origin >/dev/null 2>&1; then
+    if ! UPSTREAM="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)"; then
+        echo "ERROR: ${BRANCH} has no upstream; push it first:" >&2
+        echo "  git push -u origin ${BRANCH}" >&2
+        exit 1
+    fi
+    git fetch --quiet origin
+    AHEAD="$(git rev-list --count "${UPSTREAM}..HEAD")"
+    if [[ "${AHEAD}" -gt 0 ]]; then
+        echo "ERROR: ${AHEAD} commit(s) not pushed to ${UPSTREAM}; run git push first." >&2
+        exit 1
+    fi
+    echo "==> ${BRANCH} is in sync with ${UPSTREAM}."
 else
-    echo "==> Working tree clean."
+    echo "==> No git remote configured; skipping push check." \
+         "(Add one with: git remote add origin <url>)"
 fi
 
 GIT_SHA="$(git rev-parse --short HEAD)"
-
-# --- 2. Push to the git remote, if one exists --------------------------------
-BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-if git remote get-url origin >/dev/null 2>&1; then
-    echo "==> Pushing ${BRANCH} to origin..."
-    git push origin "${BRANCH}"
-else
-    echo "==> No git remote configured; skipping git push." \
-         "(Add one with: git remote add origin <url>)"
-fi
 
 # --- 3. Build -----------------------------------------------------------------
 echo "==> Building ${IMAGE}:${GIT_SHA}..."
