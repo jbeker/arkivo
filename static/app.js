@@ -178,11 +178,13 @@ function jobProgress(job) {
   const s = job.stats || {};
   if (job.kind === "backfill") {
     const total = s.total ? ` / ~${s.total}` : "";
-    return `backfill running \u2014 ${s.fetched ?? 0}${total} fetched (page ${s.pages ?? 0})`;
+    return `Importing \u2014 ${s.fetched ?? 0}${total} messages (page ${s.pages ?? 0})`;
   }
   if (job.kind === "promote" || job.kind === "reindex") {
-    return `${job.kind} running \u2014 ${s.promoted ?? 0} promoted, ${s.failed ?? 0} failed`;
+    const verb = job.kind === "reindex" ? "Rebuilding search index" : "Indexing for search";
+    return `${verb} \u2014 ${s.promoted ?? 0} indexed, ${s.failed ?? 0} failed`;
   }
+  if (job.kind === "poll") return "Checking for new mail\u2026";
   return `${job.kind} running\u2026`;
 }
 
@@ -200,23 +202,38 @@ async function refreshStatus() {
       .join("<br>");
     const actions = running.length
       ? progress
-      : `<button onclick="startBackfill(${a.id})">${a.backfill_done ? "re-run backfill" : "start backfill"}</button>
-         <button onclick="startJob(${a.id}, 'poll')">poll now</button>
-         <button onclick="startJob(${a.id}, 'promote')">promote now</button>
-         <button onclick="startJob(${a.id}, 'reindex')">reindex</button>
-         <button onclick="removeAccount(${a.id})">remove</button>`;
+      : `<button onclick="startBackfill(${a.id})">${a.backfill_done ? "Re-import mail" : "Import mail"}</button>
+         <button onclick="startJob(${a.id}, 'poll')">Check for new mail</button>
+         <button onclick="startJob(${a.id}, 'promote')">Index for search</button>
+         <button onclick="startJob(${a.id}, 'reindex')">Rebuild search index</button>
+         <button onclick="removeAccount(${a.id})">Remove</button>`;
+
+    // Readable message breakdown: always show searchable; add the rest
+    // only when non-zero to keep it uncluttered.
+    const c = a.counts;
+    const parts = [`${c.indexed} searchable`];
+    if (c.staged) parts.push(`${c.staged} awaiting indexing`);
+    if (c.unfetched) parts.push(`${c.unfetched} downloading`);
+    if (c.quarantined) parts.push(`${c.quarantined} quarantined`);
+    if (c.failed) parts.push(`${c.failed} failed`);
+    let messages = `${c.total} messages — ${parts.join(" · ")}`;
+    if (c.staged > 0 && !running.length) {
+      messages += `<div class="hint">${c.staged} imported but not searchable yet — click ` +
+        `<strong>Index for search</strong> to index messages older than ${a.recency_cutoff_days} ` +
+        `days (newer mail is indexed automatically as it ages; the hourly worker also does this).</div>`;
+    }
+
     return [
       a.id,
       esc(a.jmap_session_url),
-      `${a.counts.indexed}/${a.counts.total} indexed, ${a.counts.staged} staged, ` +
-        `${a.counts.quarantined} quarantined, ${a.counts.failed} failed, ${a.counts.unfetched} unfetched`,
-      a.backfill_done ? "backfill done" : "backfill pending",
-      `cutoff ${a.recency_cutoff_days}d / ${esc(a.deletion_policy)}`,
+      messages,
+      a.backfill_done ? "complete" : "incomplete",
+      `${a.recency_cutoff_days}-day cutoff · ${esc(a.deletion_policy)}`,
       actions,
     ];
   });
   document.getElementById("accounts").innerHTML =
-    rows.length ? table(rows, ["id", "session URL", "messages", "backfill", "config", "actions"])
+    rows.length ? table(rows, ["id", "account", "messages", "import", "config", "actions"])
                 : "<p>No accounts yet.</p>";
 
   // Auto-refresh while anything is running; stop when idle.
@@ -231,21 +248,27 @@ async function refreshStatus() {
 
 async function startBackfill(id) {
   const answer = prompt(
-    "Message limit for a smoke test, or leave empty for a full backfill " +
-    "(can run for hours; cancellable and resumable):", "");
+    "Import all mail? Leave empty for a full import (can run for hours; " +
+    "cancellable and resumable). Or enter a message count for a quick test:", "");
   if (answer === null) return;
   const body = answer.trim() ? { limit: parseInt(answer, 10) } : {};
   try {
     await api(`/api/accounts/${id}/backfill`, body);
-    msg("acct-msg", "backfill started", true);
+    msg("acct-msg", "import started", true);
   } catch (e) { msg("acct-msg", e.message, false); }
   refreshStatus();
 }
 
+const JOB_NAMES = {
+  poll: "check for new mail",
+  promote: "index for search",
+  reindex: "rebuild search index",
+};
+
 async function startJob(id, kind) {
   try {
     await api(`/api/accounts/${id}/${kind}`, {});
-    msg("acct-msg", `${kind} started`, true);
+    msg("acct-msg", `${JOB_NAMES[kind] || kind} started`, true);
   } catch (e) { msg("acct-msg", e.message, false); }
   refreshStatus();
 }
@@ -265,7 +288,7 @@ async function addAccount() {
       token: document.getElementById("acct-token").value,
     });
     document.getElementById("acct-token").value = "";
-    msg("acct-msg", "account added — press “start backfill” to import it", true);
+    msg("acct-msg", "account added — click “Import mail” to download it, then “Index for search” to make it searchable", true);
     refreshStatus();
   } catch (e) { msg("acct-msg", e.message, false); }
 }
