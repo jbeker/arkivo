@@ -65,6 +65,14 @@ async fn status(
         Ok(list) => list,
         Err(e) => return internal(e),
     };
+    // Read running jobs BEFORE the per-account counts. A job commits its
+    // work (upserts, mark_indexed) before flipping to a terminal status,
+    // so if the running set is empty here, the counts read afterward
+    // already reflect everything finished jobs did — an empty running
+    // list can never be paired with stale counts.
+    let running_jobs = jobs::running_for_user(&state.pool, user.id)
+        .await
+        .unwrap_or_default();
     let mut out = Vec::new();
     for account in accounts {
         let counts = messages::counts(&state.pool, account.id)
@@ -100,9 +108,6 @@ async fn status(
             })).collect::<Vec<_>>(),
         }));
     }
-    let running_jobs = jobs::running_for_user(&state.pool, user.id)
-        .await
-        .unwrap_or_default();
     Json(json!({
         "user": {"handle": user.handle, "role": user.role},
         "accounts": out,
