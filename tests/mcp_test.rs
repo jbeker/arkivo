@@ -88,6 +88,13 @@ fn email(subject: &str, body: &str) -> ExtractedEmail {
     }
 }
 
+fn email_from(subject: &str, body: &str, from: &str) -> ExtractedEmail {
+    ExtractedEmail {
+        from: vec![from.into()],
+        ..email(subject, body)
+    }
+}
+
 struct McpHarness {
     base: String,
     http: reqwest::Client,
@@ -308,6 +315,71 @@ async fn cross_user_isolation_and_audit(pool: PgPool) {
 
     search.delete_user_indices(user_a).await.unwrap();
     search.delete_user_indices(user_b).await.unwrap();
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn search_from_filter_constrains_results(pool: PgPool) {
+    let search = require_opensearch!();
+    let embedder = FakeEmbedder::default();
+    let user = unique_user(&pool, "alice").await;
+    search
+        .ensure_user_indices(user, embedder.dimension())
+        .await
+        .unwrap();
+
+    // Two messages with identical bodies but different senders.
+    let indexer = Indexer {
+        search: &search,
+        embedder: &embedder,
+    };
+    let body = "the shared project status content";
+    indexer
+        .index_message(
+            user,
+            &msg(301, "status"),
+            &email_from("status", body, "alice@example.com"),
+            true,
+        )
+        .await
+        .unwrap();
+    indexer
+        .index_message(
+            user,
+            &msg(302, "status"),
+            &email_from("status", body, "bob@example.com"),
+            true,
+        )
+        .await
+        .unwrap();
+    search.refresh_user_indices(user).await.unwrap();
+
+    let generated = arkivo::crypto::generate_token("mcp");
+    tokens::mint(&pool, user, &generated.hash, "test")
+        .await
+        .unwrap();
+    let h = McpHarness::start(pool.clone(), search_client().unwrap()).await;
+
+    let (status, value) = h
+        .call_tool(
+            &generated.token,
+            "search",
+            json!({"query": "shared project status", "from": "alice@example.com"}),
+        )
+        .await;
+    assert_eq!(status, 200);
+    let results = value
+        .pointer("/result/structuredContent/results")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("unexpected response shape: {value}"));
+    assert!(!results.is_empty(), "alice's message must match: {value}");
+    assert!(
+        results
+            .iter()
+            .all(|r| r.get("message_id").and_then(Value::as_str) != Some("302")),
+        "the from filter must exclude bob's message: {value}"
+    );
+
+    search.delete_user_indices(user).await.unwrap();
 }
 
 #[sqlx::test(migrator = "arkivo::db::MIGRATOR")]

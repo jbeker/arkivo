@@ -32,6 +32,36 @@ pub enum FacetKind {
     Year,
 }
 
+/// Optional exact-match constraint on sender/recipient addresses, applied
+/// alongside the hybrid query. Each field is a single bare address; when
+/// several are set they combine with AND. Empty means "no constraint".
+#[derive(Debug, Clone, Default)]
+pub struct SearchFilter {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub cc: Option<String>,
+}
+
+impl SearchFilter {
+    pub fn is_empty(&self) -> bool {
+        self.from.is_none() && self.to.is_none() && self.cc.is_none()
+    }
+
+    /// AND-combined `term` clauses in from/to/cc order. `suffix` is ".raw"
+    /// for the msg index (from/to/cc are text with a .raw keyword
+    /// sub-field) and "" for the chunk index (from/to/cc are plain keyword).
+    fn term_clauses(&self, suffix: &str) -> Vec<Value> {
+        [("from", &self.from), ("to", &self.to), ("cc", &self.cc)]
+            .into_iter()
+            .filter_map(|(field, value)| {
+                value
+                    .as_ref()
+                    .map(|value| json!({"term": {(format!("{field}{suffix}")): value}}))
+            })
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FacetBucket {
     pub value: String,
@@ -164,6 +194,9 @@ impl SearchClient {
         user_id: i64,
         message_id: i64,
         chunks: &[(usize, String, Vec<f32>)],
+        from: &[String],
+        to: &[String],
+        cc: &[String],
     ) -> Result<()> {
         if chunks.is_empty() {
             return Ok(());
@@ -182,6 +215,9 @@ impl SearchClient {
                     "chunk_index": chunk_index,
                     "chunk_text": text,
                     "embedding": vector,
+                    "from": from,
+                    "to": to,
+                    "cc": cc,
                 })
                 .to_string(),
             );
@@ -267,8 +303,16 @@ impl SearchClient {
             .unwrap_or_default()
     }
 
-    /// BM25 over subject and body in the message index.
-    pub async fn bm25_search(&self, user_id: i64, query: &str, size: usize) -> Result<Vec<Hit>> {
+    /// BM25 over subject and body in the message index, optionally
+    /// constrained by an exact sender/recipient filter (on the `.raw`
+    /// keyword sub-fields). An empty filter yields a no-op `filter: []`.
+    pub async fn bm25_search(
+        &self,
+        user_id: i64,
+        query: &str,
+        size: usize,
+        filter: &SearchFilter,
+    ) -> Result<Vec<Hit>> {
         let index = mappings::msg_index_name(user_id);
         let value = self
             .search(
@@ -276,9 +320,14 @@ impl SearchClient {
                 &json!({
                     "size": size,
                     "query": {
-                        "multi_match": {
-                            "query": query,
-                            "fields": ["subject^2", "body_text", "from", "to"],
+                        "bool": {
+                            "must": {
+                                "multi_match": {
+                                    "query": query,
+                                    "fields": ["subject^2", "body_text", "from", "to"],
+                                }
+                            },
+                            "filter": filter.term_clauses(".raw"),
                         }
                     }
                 }),
@@ -288,14 +337,28 @@ impl SearchClient {
     }
 
     /// kNN over chunk vectors; hits carry their chunk text for snippets.
-    pub async fn knn_search(&self, user_id: i64, vector: &[f32], k: usize) -> Result<Vec<Hit>> {
+    /// A non-empty filter is applied natively via the Lucene engine's
+    /// `knn` `filter` clause (on the chunk index's plain-keyword address
+    /// fields), keeping the semantic half consistent with BM25.
+    pub async fn knn_search(
+        &self,
+        user_id: i64,
+        vector: &[f32],
+        k: usize,
+        filter: &SearchFilter,
+    ) -> Result<Vec<Hit>> {
         let index = mappings::chunk_index_name(user_id);
+        let mut embedding = json!({"vector": vector, "k": k});
+        let clauses = filter.term_clauses("");
+        if !clauses.is_empty() {
+            embedding["filter"] = json!({"bool": {"filter": clauses}});
+        }
         let value = self
             .search(
                 &index,
                 &json!({
                     "size": k,
-                    "query": {"knn": {"embedding": {"vector": vector, "k": k}}},
+                    "query": {"knn": {"embedding": embedding}},
                 }),
             )
             .await?;
@@ -359,5 +422,53 @@ impl SearchClient {
         anyhow::ensure!(response.status().is_success(), "get doc failed");
         let value: Value = response.json().await?;
         Ok(value.get("_source").cloned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_filter_yields_no_clauses() {
+        let f = SearchFilter::default();
+        assert!(f.is_empty());
+        assert!(f.term_clauses(".raw").is_empty());
+        assert!(f.term_clauses("").is_empty());
+    }
+
+    #[test]
+    fn single_field_targets_raw_subfield_on_msg_index() {
+        let f = SearchFilter {
+            from: Some("alice@example.com".into()),
+            ..Default::default()
+        };
+        assert!(!f.is_empty());
+        assert_eq!(
+            f.term_clauses(".raw"),
+            vec![json!({"term": {"from.raw": "alice@example.com"}})]
+        );
+        // Chunk index uses the bare keyword field.
+        assert_eq!(
+            f.term_clauses(""),
+            vec![json!({"term": {"from": "alice@example.com"}})]
+        );
+    }
+
+    #[test]
+    fn multiple_fields_are_and_combined_in_from_to_cc_order() {
+        let f = SearchFilter {
+            from: Some("a@x.com".into()),
+            to: Some("b@x.com".into()),
+            cc: Some("c@x.com".into()),
+        };
+        assert_eq!(
+            f.term_clauses(".raw"),
+            vec![
+                json!({"term": {"from.raw": "a@x.com"}}),
+                json!({"term": {"to.raw": "b@x.com"}}),
+                json!({"term": {"cc.raw": "c@x.com"}}),
+            ]
+        );
     }
 }

@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::embed::EmbeddingProvider;
-use crate::search::client::{Hit, SearchClient};
+use crate::search::client::{Hit, SearchClient, SearchFilter};
 
 /// Standard RRF constant: softens the head of each ranking.
 pub const RRF_K: f32 = 60.0;
@@ -89,12 +89,13 @@ pub async fn hybrid_search(
     user_id: i64,
     query: &str,
     limit: usize,
+    filter: &SearchFilter,
 ) -> Result<Vec<RankedResult>> {
     let depth = (limit * 4).max(20);
     let vector = embedder.embed_query(query).await?;
     let (bm25, knn) = try_join!(
-        search.bm25_search(user_id, query, depth),
-        search.knn_search(user_id, &vector, depth),
+        search.bm25_search(user_id, query, depth, filter),
+        search.knn_search(user_id, &vector, depth, filter),
     )?;
     Ok(rrf_fuse(&bm25, &knn, limit))
 }

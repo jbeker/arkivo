@@ -15,7 +15,7 @@ use crate::db::audit;
 use crate::embed::EmbeddingProvider;
 use crate::mcp::auth::AuthedUser;
 use crate::search::SearchClient;
-use crate::search::client::FacetKind;
+use crate::search::client::{FacetKind, SearchFilter};
 use crate::search::hybrid::hybrid_search;
 
 #[derive(Clone)]
@@ -32,6 +32,14 @@ pub struct SearchParams {
     pub query: String,
     /// Maximum results to return (default 10, max 50).
     pub limit: Option<usize>,
+    /// Exact-match filter: keep only messages whose From is exactly this
+    /// address (a bare address, e.g. "alice@example.com" — use a value
+    /// from list_facets "from"). Combined with to/cc via AND.
+    pub from: Option<String>,
+    /// Exact-match filter on a To recipient address (bare address).
+    pub to: Option<String>,
+    /// Exact-match filter on a Cc recipient address (bare address).
+    pub cc: Option<String>,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -140,12 +148,18 @@ impl ArkivoMcp {
     ) -> Result<Json<SearchResults>, ErrorData> {
         let user = authed(&ctx)?;
         let limit = params.limit.unwrap_or(10).clamp(1, 50);
+        let filter = SearchFilter {
+            from: params.from.clone(),
+            to: params.to.clone(),
+            cc: params.cc.clone(),
+        };
         let ranked = hybrid_search(
             &self.search,
             self.embedder.as_ref(),
             user.user_id,
             &params.query,
             limit,
+            &filter,
         )
         .await
         .map_err(internal)?;
@@ -182,7 +196,13 @@ impl ArkivoMcp {
             &user.actor(),
             "search",
             None,
-            Some(&serde_json::json!({"query": params.query, "results": results.len()})),
+            Some(&serde_json::json!({
+                "query": params.query,
+                "from": params.from,
+                "to": params.to,
+                "cc": params.cc,
+                "results": results.len(),
+            })),
         )
         .await
         .map_err(internal)?;

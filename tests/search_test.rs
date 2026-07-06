@@ -9,6 +9,7 @@ use arkivo::db::messages::Message;
 use arkivo::embed::{EmbeddingProvider, FakeEmbedder};
 use arkivo::extract::ExtractedEmail;
 use arkivo::search::SearchClient;
+use arkivo::search::client::SearchFilter;
 use arkivo::search::hybrid::hybrid_search;
 use arkivo::search::indexer::Indexer;
 use chrono::{TimeZone, Utc};
@@ -80,6 +81,22 @@ fn email(subject: &str, body: &str) -> ExtractedEmail {
     }
 }
 
+/// Like `email`, but with explicit sender/recipient addresses for
+/// structured-filter tests.
+fn email_addrs(subject: &str, body: &str, from: &str, to: &str, cc: &str) -> ExtractedEmail {
+    ExtractedEmail {
+        subject: Some(subject.into()),
+        from: vec![from.into()],
+        to: vec![to.into()],
+        cc: if cc.is_empty() {
+            vec![]
+        } else {
+            vec![cc.into()]
+        },
+        body_text: body.into(),
+    }
+}
+
 #[tokio::test]
 async fn search_on_missing_indices_returns_empty() {
     // A fresh account that has never been promoted has no indices; the
@@ -90,7 +107,7 @@ async fn search_on_missing_indices_returns_empty() {
 
     assert!(
         search
-            .bm25_search(user_id, "anything", 10)
+            .bm25_search(user_id, "anything", 10, &SearchFilter::default())
             .await
             .unwrap()
             .is_empty()
@@ -98,7 +115,7 @@ async fn search_on_missing_indices_returns_empty() {
     let vector = embedder.embed_query("anything").await.unwrap();
     assert!(
         search
-            .knn_search(user_id, &vector, 10)
+            .knn_search(user_id, &vector, 10, &SearchFilter::default())
             .await
             .unwrap()
             .is_empty()
@@ -151,7 +168,7 @@ async fn index_and_search_bm25_and_knn() {
 
     // BM25 finds the budget message by keyword.
     let hits = search
-        .bm25_search(user_id, "reimbursement", 10)
+        .bm25_search(user_id, "reimbursement", 10, &SearchFilter::default())
         .await
         .unwrap();
     assert_eq!(hits.len(), 1);
@@ -160,7 +177,10 @@ async fn index_and_search_bm25_and_knn() {
     // kNN with the exact chunk text returns that chunk first
     // (FakeEmbedder: identical text = identical vector).
     let vector = embedder.embed_query(body_b).await.unwrap();
-    let hits = search.knn_search(user_id, &vector, 5).await.unwrap();
+    let hits = search
+        .knn_search(user_id, &vector, 5, &SearchFilter::default())
+        .await
+        .unwrap();
     assert!(!hits.is_empty());
     assert_eq!(hits[0].message_id, "2");
 
@@ -202,9 +222,16 @@ async fn hybrid_fuses_across_both_indices() {
         .unwrap();
     search.refresh_user_indices(user_id).await.unwrap();
 
-    let results = hybrid_search(&search, &embedder, user_id, body, 5)
-        .await
-        .unwrap();
+    let results = hybrid_search(
+        &search,
+        &embedder,
+        user_id,
+        body,
+        5,
+        &SearchFilter::default(),
+    )
+    .await
+    .unwrap();
     assert!(!results.is_empty());
     assert_eq!(
         results[0].message_id, "10",
@@ -242,7 +269,7 @@ async fn reindex_overwrite_is_idempotent_and_delete_removes_docs() {
     search.refresh_user_indices(user_id).await.unwrap();
 
     let hits = search
-        .bm25_search(user_id, "indexed twice", 10)
+        .bm25_search(user_id, "indexed twice", 10, &SearchFilter::default())
         .await
         .unwrap();
     assert_eq!(hits.len(), 1, "doc-id upsert, not duplication");
@@ -250,7 +277,7 @@ async fn reindex_overwrite_is_idempotent_and_delete_removes_docs() {
     search.delete_message_docs(user_id, msg.id).await.unwrap();
     search.refresh_user_indices(user_id).await.unwrap();
     let hits = search
-        .bm25_search(user_id, "indexed twice", 10)
+        .bm25_search(user_id, "indexed twice", 10, &SearchFilter::default())
         .await
         .unwrap();
     assert!(hits.is_empty());
@@ -289,9 +316,167 @@ async fn user_indices_are_isolated() {
         .unwrap();
     search.refresh_user_indices(user_a).await.unwrap();
 
-    let hits = search.bm25_search(user_b, "alpha", 10).await.unwrap();
+    let hits = search
+        .bm25_search(user_b, "alpha", 10, &SearchFilter::default())
+        .await
+        .unwrap();
     assert!(hits.is_empty(), "user B must never see user A's documents");
 
     search.delete_user_indices(user_a).await.unwrap();
     search.delete_user_indices(user_b).await.unwrap();
+}
+
+#[tokio::test]
+async fn structured_filter_constrains_bm25_knn_and_hybrid() {
+    let search = require_opensearch!();
+    let user_id = test_user_id();
+    let embedder = FakeEmbedder::default();
+    search
+        .ensure_user_indices(user_id, embedder.dimension())
+        .await
+        .unwrap();
+
+    let indexer = Indexer {
+        search: &search,
+        embedder: &embedder,
+    };
+    // Two messages with *identical* bodies (so both are equally strong
+    // BM25 and kNN hits) but different senders — only the filter can tell
+    // them apart. This proves the filter reaches the kNN half, not just BM25.
+    let body = "The migration runbook covers cutover, rollback, and verification.";
+    indexer
+        .index_message(
+            user_id,
+            &message(40, "runbook"),
+            &email_addrs(
+                "runbook",
+                body,
+                "alice@example.com",
+                "owner@example.com",
+                "",
+            ),
+            true,
+        )
+        .await
+        .unwrap();
+    indexer
+        .index_message(
+            user_id,
+            &message(41, "runbook"),
+            &email_addrs("runbook", body, "bob@example.com", "owner@example.com", ""),
+            true,
+        )
+        .await
+        .unwrap();
+    search.refresh_user_indices(user_id).await.unwrap();
+
+    let from_alice = SearchFilter {
+        from: Some("alice@example.com".into()),
+        ..Default::default()
+    };
+
+    // BM25: only alice's message survives the filter.
+    let hits = search
+        .bm25_search(user_id, "migration runbook", 10, &from_alice)
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].message_id, "40");
+
+    // kNN: the exact chunk vector matches both, but the filter pins it to alice.
+    let vector = embedder.embed_query(body).await.unwrap();
+    let hits = search
+        .knn_search(user_id, &vector, 10, &from_alice)
+        .await
+        .unwrap();
+    assert!(!hits.is_empty());
+    assert!(
+        hits.iter().all(|h| h.message_id == "40"),
+        "filtered kNN must exclude bob's message"
+    );
+
+    // Hybrid: fused result set is constrained to alice.
+    let results = hybrid_search(&search, &embedder, user_id, body, 5, &from_alice)
+        .await
+        .unwrap();
+    assert!(!results.is_empty());
+    assert!(results.iter().all(|r| r.message_id == "40"));
+
+    // A non-matching sender yields nothing.
+    let from_carol = SearchFilter {
+        from: Some("carol@example.com".into()),
+        ..Default::default()
+    };
+    assert!(
+        search
+            .bm25_search(user_id, "migration runbook", 10, &from_carol)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    search.delete_user_indices(user_id).await.unwrap();
+}
+
+#[tokio::test]
+async fn structured_filter_fields_combine_with_and() {
+    let search = require_opensearch!();
+    let user_id = test_user_id();
+    let embedder = FakeEmbedder::default();
+    search
+        .ensure_user_indices(user_id, embedder.dimension())
+        .await
+        .unwrap();
+
+    let indexer = Indexer {
+        search: &search,
+        embedder: &embedder,
+    };
+    let body = "Invoice for the consulting engagement, net 30 terms.";
+    indexer
+        .index_message(
+            user_id,
+            &message(50, "invoice"),
+            &email_addrs(
+                "invoice",
+                body,
+                "alice@example.com",
+                "owner@example.com",
+                "",
+            ),
+            true,
+        )
+        .await
+        .unwrap();
+    search.refresh_user_indices(user_id).await.unwrap();
+
+    // from AND to both match → hit.
+    let both_match = SearchFilter {
+        from: Some("alice@example.com".into()),
+        to: Some("owner@example.com".into()),
+        ..Default::default()
+    };
+    let hits = search
+        .bm25_search(user_id, "invoice", 10, &both_match)
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].message_id, "50");
+
+    // from matches but to does not → AND excludes it.
+    let to_mismatch = SearchFilter {
+        from: Some("alice@example.com".into()),
+        to: Some("someone-else@example.com".into()),
+        ..Default::default()
+    };
+    assert!(
+        search
+            .bm25_search(user_id, "invoice", 10, &to_mismatch)
+            .await
+            .unwrap()
+            .is_empty(),
+        "AND semantics: a single mismatched field excludes the message"
+    );
+
+    search.delete_user_indices(user_id).await.unwrap();
 }

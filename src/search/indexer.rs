@@ -11,8 +11,9 @@ use crate::extract::{ExtractedEmail, chunk::chunk_text, quotes::strip_quotes};
 use crate::search::client::SearchClient;
 
 /// Bumped whenever extraction/sanitization behavior changes, so a
-/// reindex can tell stale documents from current ones.
-pub const PIPELINE_VERSION: i32 = 1;
+/// reindex can tell stale documents from current ones. v2 denormalizes
+/// from/to/cc into chunk docs for filtered kNN.
+pub const PIPELINE_VERSION: i32 = 2;
 
 pub struct Indexer<'a> {
     pub search: &'a SearchClient,
@@ -64,7 +65,9 @@ impl Indexer<'_> {
             .map(|(i, (text, vector))| (i, text, vector))
             .collect();
         let count = chunks.len();
-        self.search.bulk_chunks(user_id, msg.id, &chunks).await?;
+        self.search
+            .bulk_chunks(user_id, msg.id, &chunks, &email.from, &email.to, &email.cc)
+            .await?;
         Ok(IndexOutcome { chunks: count })
     }
 }

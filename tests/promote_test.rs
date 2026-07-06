@@ -9,6 +9,7 @@ use arkivo::embed::FakeEmbedder;
 use arkivo::maildir::{Maildir, MessageStore};
 use arkivo::promote::promote_account;
 use arkivo::search::SearchClient;
+use arkivo::search::client::SearchFilter;
 use chrono::{Duration, TimeZone, Utc};
 use sqlx::PgPool;
 
@@ -272,7 +273,12 @@ async fn reset_links_are_redacted_in_index(pool: PgPool) {
         .unwrap();
 
     let hits = search
-        .bm25_search(fx.account.user_id, "password reset", 10)
+        .bm25_search(
+            fx.account.user_id,
+            "password reset",
+            10,
+            &SearchFilter::default(),
+        )
         .await
         .unwrap();
     assert_eq!(hits.len(), 1);
@@ -347,7 +353,7 @@ async fn quarantined_sender_never_reaches_index(pool: PgPool) {
         .await
         .unwrap();
     let hits = search
-        .bm25_search(fx.account.user_id, "balance", 10)
+        .bm25_search(fx.account.user_id, "balance", 10, &SearchFilter::default())
         .await
         .unwrap();
     assert!(
@@ -398,7 +404,12 @@ async fn duplicate_message_id_is_not_reembedded(pool: PgPool) {
         .await
         .unwrap();
     let hits = search
-        .bm25_search(fx.account.user_id, "identical content", 10)
+        .bm25_search(
+            fx.account.user_id,
+            "identical content",
+            10,
+            &SearchFilter::default(),
+        )
         .await
         .unwrap();
     assert_eq!(hits.len(), 1, "only one copy indexed");

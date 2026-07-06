@@ -46,6 +46,9 @@ pub fn chunk_index_body(dimension: usize) -> Value {
                 "message_id":  {"type": "keyword"},
                 "chunk_index": {"type": "integer"},
                 "chunk_text":  {"type": "text"},
+                "from":        {"type": "keyword"},
+                "to":          {"type": "keyword"},
+                "cc":          {"type": "keyword"},
                 "embedding": {
                     "type": "knn_vector",
                     "dimension": dimension,
