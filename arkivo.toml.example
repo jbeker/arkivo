@@ -15,7 +15,7 @@ url = "http://localhost:9200"
 url = "http://localhost:11434"
 model = "nomic-embed-text"
 dimension = 768
-num_ctx = 4096
+num_ctx = 8192
 
 [web]
 bind = "127.0.0.1:8080"

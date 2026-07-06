@@ -1,11 +1,15 @@
-//! Chunker for the embedding path: ~1,000-token targets (chars/4
-//! heuristic) with ~120-token overlap, splitting on paragraph boundaries
-//! where possible. nomic-embed-text handles these sizes comfortably
-//! inside the num_ctx we send.
+//! Chunker for the embedding path: ~500-token targets (chars/4 heuristic)
+//! with ~60-token overlap, splitting on paragraph boundaries where
+//! possible. The chars/4 ratio holds for English but not for token-dense
+//! content (non-Latin scripts, long encoded blobs, URLs), which can
+//! tokenize at close to 1 token per character. Keeping the target small
+//! leaves headroom so even dense chunks stay within the embedding
+//! context; the embedder also truncates as a final backstop.
 
-/// Character budgets derived from the token targets (chars ≈ tokens × 4).
-pub const TARGET_CHARS: usize = 4000;
-pub const OVERLAP_CHARS: usize = 480;
+/// Character budgets derived from the token targets (chars ≈ tokens × 4
+/// for typical prose; deliberately conservative for denser content).
+pub const TARGET_CHARS: usize = 2000;
+pub const OVERLAP_CHARS: usize = 240;
 
 /// Split `text` into embedding-sized chunks. Guarantees:
 /// - no chunk exceeds TARGET_CHARS + OVERLAP_CHARS characters;

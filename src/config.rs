@@ -124,7 +124,9 @@ fn default_embedding_dimension() -> usize {
 }
 
 fn default_num_ctx() -> usize {
-    4096
+    // nomic-embed-text's full context. Larger than any chunk we produce,
+    // so token-dense chunks still fit.
+    8192
 }
 
 fn default_recency_cutoff_days() -> u32 {
@@ -172,7 +174,7 @@ mod tests {
             let cfg = AppConfig::load(None).expect("config should load");
             assert_eq!(cfg.embedding.model, "nomic-embed-text");
             assert_eq!(cfg.embedding.dimension, 768);
-            assert_eq!(cfg.embedding.num_ctx, 4096);
+            assert_eq!(cfg.embedding.num_ctx, 8192);
             assert_eq!(cfg.defaults.recency_cutoff_days, 7);
             assert_eq!(cfg.defaults.deletion_policy, DeletionPolicy::Retain);
             Ok(())

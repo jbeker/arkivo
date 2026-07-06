@@ -77,14 +77,35 @@ impl OllamaEmbedder {
     }
 }
 
+impl OllamaEmbedder {
+    /// Hard character cap per input so nothing overruns the model
+    /// context. Chunks are sized well under this; the cap is a backstop
+    /// for token-dense content (CJK, encoded blobs) where the chars/token
+    /// ratio falls far below the chunker's assumption. Using ~0.75 chars
+    /// per allotted token is conservative even for near-1-token-per-char
+    /// scripts.
+    fn max_input_chars(&self) -> usize {
+        (self.num_ctx * 3 / 4).max(256)
+    }
+}
+
+/// Trim `s` to at most `max_chars` characters on a UTF-8 boundary.
+fn truncate_chars(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
+
 #[async_trait::async_trait]
 impl EmbeddingProvider for OllamaEmbedder {
     async fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let max_chars = self.max_input_chars();
         let mut all = Vec::with_capacity(texts.len());
         for batch in texts.chunks(EMBED_BATCH) {
             let prefixed: Vec<String> = batch
                 .iter()
-                .map(|t| format!("search_document: {t}"))
+                .map(|t| format!("search_document: {}", truncate_chars(t, max_chars)))
                 .collect();
             all.extend(self.embed_batch(&prefixed).await?);
         }
@@ -92,6 +113,7 @@ impl EmbeddingProvider for OllamaEmbedder {
     }
 
     async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        let text = truncate_chars(text, self.max_input_chars());
         let embeddings = self.embed_batch(&[format!("search_query: {text}")]).await?;
         embeddings
             .into_iter()
@@ -175,5 +197,16 @@ mod tests {
         assert_ne!(a, c);
         let norm: f32 = a.iter().map(|v| v * v).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn truncate_chars_respects_char_boundaries() {
+        assert_eq!(truncate_chars("hello", 10), "hello");
+        assert_eq!(truncate_chars("hello", 3), "hel");
+        // Multi-byte chars must not be split mid-codepoint.
+        let s = "héllo wörld";
+        let cut = truncate_chars(s, 4);
+        assert_eq!(cut.chars().count(), 4);
+        assert!(s.starts_with(cut));
     }
 }
