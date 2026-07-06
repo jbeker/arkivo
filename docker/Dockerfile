@@ -22,6 +22,11 @@ ADD https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSI
 RUN chmod +x /usr/local/bin/supercronic
 COPY --from=builder /build/target/release/arkivo /usr/local/bin/arkivo
 COPY docker/crontab /etc/arkivo/crontab
-RUN useradd --system --create-home arkivo
+# Create the Maildir root owned by the runtime user. A fresh named volume
+# mounted at /data/mail inherits this ownership, so the non-root process
+# can write to it (otherwise Docker creates the mountpoint as root).
+RUN useradd --system --create-home arkivo \
+    && mkdir -p /data/mail \
+    && chown -R arkivo:arkivo /data
 USER arkivo
 ENTRYPOINT ["/usr/local/bin/arkivo"]
