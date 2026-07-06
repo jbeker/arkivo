@@ -206,6 +206,7 @@ async function refreshStatus() {
          <button onclick="startJob(${a.id}, 'poll')">Check for new mail</button>
          <button onclick="startJob(${a.id}, 'promote')">Index for search</button>
          <button onclick="startJob(${a.id}, 'reindex')">Rebuild search index</button>
+         <button onclick="changeCutoff(${a.id}, ${a.recency_cutoff_days})">Change cutoff</button>
          <button onclick="removeAccount(${a.id})">Remove</button>`;
 
     // Readable message breakdown: always show searchable; add the rest
@@ -269,6 +270,25 @@ async function startJob(id, kind) {
   try {
     await api(`/api/accounts/${id}/${kind}`, {});
     msg("acct-msg", `${JOB_NAMES[kind] || kind} started`, true);
+  } catch (e) { msg("acct-msg", e.message, false); }
+  refreshStatus();
+}
+
+async function changeCutoff(id, current) {
+  const answer = prompt(
+    "Recency cutoff in days — mail becomes searchable only once it is this " +
+    "old. Lower values surface mail sooner but shrink the window that keeps " +
+    "recent (e.g. password-reset) mail out of agent reach:", String(current));
+  if (answer === null) return;
+  const days = parseInt(answer.trim(), 10);
+  if (!Number.isInteger(days) || days < 0 || days > 365) {
+    msg("acct-msg", "cutoff must be a whole number of days between 0 and 365", false);
+    return;
+  }
+  try {
+    await api(`/api/accounts/${id}`, { recency_cutoff_days: days }, "PATCH");
+    msg("acct-msg",
+      `cutoff set to ${days} day(s) — click “Index for search” to index newly eligible mail`, true);
   } catch (e) { msg("acct-msg", e.message, false); }
   refreshStatus();
 }
