@@ -73,6 +73,28 @@ impl SearchClient {
         Ok(value)
     }
 
+    /// POST a `_search` body, treating a not-yet-created index as empty
+    /// results. A fresh account that has never been promoted has no
+    /// indices, so an agent searching it should get nothing back rather
+    /// than an index_not_found error.
+    async fn search(&self, index: &str, body: &Value) -> Result<Value> {
+        let response = self
+            .request(Method::POST, &format!("/{index}/_search"))
+            .json(body)
+            .send()
+            .await?;
+        let status = response.status();
+        if status.as_u16() == 404 {
+            return Ok(json!({"hits": {"hits": []}}));
+        }
+        let value: Value = response.json().await.unwrap_or(Value::Null);
+        anyhow::ensure!(
+            status.is_success(),
+            "OpenSearch /{index}/_search returned {status}: {value}"
+        );
+        Ok(value)
+    }
+
     pub async fn health(&self) -> Result<Value> {
         self.send_json(Method::GET, "/_cluster/health", None).await
     }
@@ -249,10 +271,9 @@ impl SearchClient {
     pub async fn bm25_search(&self, user_id: i64, query: &str, size: usize) -> Result<Vec<Hit>> {
         let index = mappings::msg_index_name(user_id);
         let value = self
-            .send_json(
-                Method::POST,
-                &format!("/{index}/_search"),
-                Some(&json!({
+            .search(
+                &index,
+                &json!({
                     "size": size,
                     "query": {
                         "multi_match": {
@@ -260,7 +281,7 @@ impl SearchClient {
                             "fields": ["subject^2", "body_text", "from", "to"],
                         }
                     }
-                })),
+                }),
             )
             .await?;
         Ok(Self::parse_hits(&value, "message_id"))
@@ -270,13 +291,12 @@ impl SearchClient {
     pub async fn knn_search(&self, user_id: i64, vector: &[f32], k: usize) -> Result<Vec<Hit>> {
         let index = mappings::chunk_index_name(user_id);
         let value = self
-            .send_json(
-                Method::POST,
-                &format!("/{index}/_search"),
-                Some(&json!({
+            .search(
+                &index,
+                &json!({
                     "size": k,
                     "query": {"knn": {"embedding": {"vector": vector, "k": k}}},
-                })),
+                }),
             )
             .await?;
         Ok(Self::parse_hits(&value, "message_id"))
@@ -304,11 +324,7 @@ impl SearchClient {
             }}),
         };
         let value = self
-            .send_json(
-                Method::POST,
-                &format!("/{index}/_search"),
-                Some(&json!({"size": 0, "aggs": aggs})),
-            )
+            .search(&index, &json!({"size": 0, "aggs": aggs}))
             .await?;
         let buckets = value
             .pointer("/aggregations/f/buckets")

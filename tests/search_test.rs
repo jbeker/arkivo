@@ -81,6 +81,39 @@ fn email(subject: &str, body: &str) -> ExtractedEmail {
 }
 
 #[tokio::test]
+async fn search_on_missing_indices_returns_empty() {
+    // A fresh account that has never been promoted has no indices; the
+    // MCP tools must return empty rather than an index_not_found error.
+    let search = require_opensearch!();
+    let user_id = test_user_id(); // no ensure_user_indices — indices absent
+    let embedder = FakeEmbedder::default();
+
+    assert!(
+        search
+            .bm25_search(user_id, "anything", 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let vector = embedder.embed_query("anything").await.unwrap();
+    assert!(
+        search
+            .knn_search(user_id, &vector, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        search
+            .facets(user_id, arkivo::search::client::FacetKind::Year, 20)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(search.get_msg_doc(user_id, 1).await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn index_and_search_bm25_and_knn() {
     let search = require_opensearch!();
     let user_id = test_user_id();
