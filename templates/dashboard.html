@@ -1,52 +1,68 @@
 {% extends "base.html" %}
+{% block masthead_actions %}
+  <span>Signed in as <strong>{{ handle }}</strong>{% if is_admin %} · admin{% endif %}</span>
+  <button class="btn btn-sm" onclick="doLogout()">Sign out</button>
+{% endblock %}
 {% block content %}
-<p>Signed in as <strong>{{ handle }}</strong>
-  {% if is_admin %}(admin){% endif %}
-  <button onclick="doLogout()">Sign out</button></p>
 
-<div class="card">
-  <h2>Mail accounts</h2>
-  <p class="hint">Two steps to searchable mail: <strong>Import mail</strong> downloads it into
-    the archive, then <strong>Index for search</strong> makes messages older than the recency
-    cutoff searchable. Both also run automatically on a schedule — the buttons just trigger them now.</p>
+<section>
+  <div class="section-head">
+    <h2>Mail accounts</h2>
+    <p>Two steps to searchable mail: <strong>Import mail</strong> downloads it into the archive,
+      then <strong>Index for search</strong> makes messages older than the recency cutoff searchable.
+      Both also run on a schedule — the buttons just trigger them now.</p>
+  </div>
+  <p id="acct-msg" class="feedback"></p>
   <div id="accounts"></div>
-  <h3>Add Fastmail account</h3>
-  <input id="acct-url" placeholder="JMAP session URL" value="https://api.fastmail.com/jmap/session" size="45">
-  <input id="acct-token" placeholder="read-only API token" type="password" size="30">
-  <button onclick="addAccount()">Add account</button>
-  <p id="acct-msg"></p>
-</div>
 
-<div class="card">
-  <h2>MCP tokens</h2>
+  <div class="card" style="margin-top: var(--space-md)">
+    <h3 style="margin-top:0">Add a Fastmail account</h3>
+    <div class="field-row">
+      <input id="acct-url" placeholder="JMAP session URL" value="https://api.fastmail.com/jmap/session" size="40">
+      <input id="acct-token" placeholder="read-only API token" type="password" size="26">
+      <button class="btn btn-primary" onclick="addAccount()">Add account</button>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="section-head"><h2>MCP tokens</h2>
+    <p>Bearer tokens for read-only agent search. Shown once at creation.</p></div>
   <div id="tokens"></div>
-  <input id="token-label" placeholder="label (e.g. laptop-agent)">
-  <button onclick="mintToken()">Mint token</button>
-  <p id="token-msg"></p>
-</div>
+  <p id="token-msg" class="feedback"></p>
+  <div class="field-row">
+    <input id="token-label" placeholder="label (e.g. laptop-agent)">
+    <button class="btn" onclick="mintToken()">Mint token</button>
+  </div>
+</section>
 
-<div class="card">
-  <h2>Passkeys</h2>
+<section>
+  <div class="section-head"><h2>Passkeys</h2>
+    <p>The only way to sign in. Keep at least one enrolled per device you trust.</p></div>
   <div id="passkeys"></div>
-  <button onclick="addPasskey()">Add a passkey for this account</button>
-  <p id="passkey-msg"></p>
-</div>
+  <p id="passkey-msg" class="feedback"></p>
+  <button class="btn" onclick="addPasskey()">Add a passkey for this device</button>
+</section>
 
-<div class="card">
-  <h2>Recent access (audit log)</h2>
+<section>
+  <div class="section-head"><h2>Recent access</h2>
+    <p>Every read against the archive is logged here.</p></div>
   <div id="audit"></div>
-</div>
+</section>
 
 {% if is_admin %}
-<div class="card">
-  <h2>Admin: users</h2>
+<section>
+  <div class="section-head"><h2>Users</h2>
+    <p class="muted">Admin</p></div>
   <div id="admin-users"></div>
-  <select id="invite-role"><option value="user">user</option><option value="admin">admin</option></select>
-  <button onclick="createInvite()">Create invite</button>
-  <p id="invite-msg"></p>
+  <p id="invite-msg" class="feedback"></p>
+  <div class="field-row">
+    <select id="invite-role"><option value="user">user</option><option value="admin">admin</option></select>
+    <button class="btn" onclick="createInvite()">Create invite</button>
+  </div>
   <h3>System health</h3>
   <div id="admin-health"></div>
-</div>
+</section>
 {% endif %}
 {% endblock %}
 {% block script %}

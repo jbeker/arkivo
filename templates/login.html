@@ -1,34 +1,52 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="card" id="setup-card" style="display:none">
-  <h2>First-run setup</h2>
-  <p>No accounts exist yet. Create the first administrator with a passkey.</p>
-  <input id="setup-handle" placeholder="choose an admin handle">
-  <button onclick="doSetup()">Create first admin</button>
-  <p id="setup-msg"></p>
-</div>
+<div style="max-width: 30rem; display: flex; flex-direction: column; gap: var(--space-md)">
 
-<div class="card auth-card">
-  <h2>Sign in</h2>
-  <input id="login-handle" placeholder="handle" autocomplete="username webauthn">
-  <button onclick="doLogin()">Sign in with passkey</button>
-  <p id="login-msg"></p>
-</div>
+  <div class="card card--primary" id="setup-card" style="display:none">
+    <div class="section-head" style="margin:0">
+      <h2>Welcome — first-run setup</h2>
+      <p>No accounts exist yet. Create the first administrator with a passkey on this device.</p>
+    </div>
+    <div class="field-row">
+      <input id="setup-handle" placeholder="choose an admin handle" autocomplete="username">
+      <button class="btn btn-primary" onclick="doSetup()">Create first admin</button>
+    </div>
+    <p id="setup-msg" class="feedback"></p>
+  </div>
 
-<div class="card auth-card">
-  <h2>Register (invite required)</h2>
-  <input id="reg-invite" placeholder="invite code">
-  <input id="reg-handle" placeholder="choose a handle">
-  <button onclick="doRegister()">Create account with passkey</button>
-  <p id="reg-msg"></p>
-</div>
+  <div class="card card--primary auth-card">
+    <div class="section-head" style="margin:0"><h2>Sign in</h2></div>
+    <div class="field-row">
+      <input id="login-handle" placeholder="handle" autocomplete="username webauthn">
+      <button class="btn btn-primary" onclick="doLogin()">Sign in with passkey</button>
+    </div>
+    <p id="login-msg" class="feedback"></p>
+  </div>
 
-<div class="card auth-card">
-  <h2>Recover access</h2>
-  <input id="rec-handle" placeholder="handle">
-  <input id="rec-code" placeholder="recovery code">
-  <button onclick="doRecover()">Enroll new passkey</button>
-  <p id="rec-msg"></p>
+  <h3 class="auth-card">Don't have access yet?</h3>
+
+  <div class="card auth-card">
+    <div class="section-head" style="margin:0"><h2>Register</h2>
+      <p>Requires an invite code from an administrator.</p></div>
+    <div class="field-row">
+      <input id="reg-invite" placeholder="invite code">
+      <input id="reg-handle" placeholder="choose a handle" autocomplete="username">
+      <button class="btn" onclick="doRegister()">Create account</button>
+    </div>
+    <p id="reg-msg" class="feedback"></p>
+  </div>
+
+  <div class="card auth-card">
+    <div class="section-head" style="margin:0"><h2>Recover access</h2>
+      <p>Lost your device? Enroll a new passkey with a recovery code.</p></div>
+    <div class="field-row">
+      <input id="rec-handle" placeholder="handle" autocomplete="username">
+      <input id="rec-code" placeholder="recovery code">
+      <button class="btn" onclick="doRecover()">Enroll new passkey</button>
+    </div>
+    <p id="rec-msg" class="feedback"></p>
+  </div>
+
 </div>
 {% endblock %}
 {% block script %}

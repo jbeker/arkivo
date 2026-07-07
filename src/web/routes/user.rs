@@ -82,7 +82,7 @@ async fn status(
             .await
             .ok()
             .flatten();
-        let recent_jobs = jobs::recent(&state.pool, account.id, 5)
+        let recent_jobs = jobs::recent(&state.pool, account.id, 8)
             .await
             .unwrap_or_default();
         out.push(json!({
