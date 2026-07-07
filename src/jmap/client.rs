@@ -354,7 +354,11 @@ impl JmapClient {
         Ok(ids)
     }
 
-    /// Download the raw RFC822 blob for a message.
+    /// Download the raw RFC822 blob for a message. Retries not only
+    /// 429/503 but also transient network failures — a timeout or dropped
+    /// connection on either the request or the body read. Backfill sweeps
+    /// hundreds of thousands of blobs, so a single flaky download must not
+    /// be fatal.
     pub async fn download_blob(&self, blob_id: &str) -> Result<Vec<u8>, JmapError> {
         let url = self
             .session
@@ -365,21 +369,38 @@ impl JmapClient {
             .replace("{type}", "application%2Foctet-stream");
         let mut attempt = 0u32;
         loop {
-            let response = self.http.get(&url).bearer_auth(&self.token).send().await?;
-            let status = response.status();
-            if status.as_u16() == 429 || status.as_u16() == 503 {
-                if attempt >= self.retry.max_retries {
-                    return Err(JmapError::Status(status.as_u16()));
+            let result = self.download_once(&url).await;
+            let retryable = match &result {
+                Err(JmapError::Status(s)) => *s == 429 || *s == 503,
+                Err(JmapError::Http(e)) => is_transient(e),
+                _ => false,
+            };
+            match result {
+                Ok(bytes) => return Ok(bytes),
+                Err(e) if !retryable || attempt >= self.retry.max_retries => return Err(e),
+                Err(e) => {
+                    let delay = self.retry.base_delay * 2u32.pow(attempt);
+                    tracing::warn!(?delay, attempt, error = %e, "blob download failed, retrying");
+                    tokio::time::sleep(delay).await;
+                    attempt += 1;
                 }
-                let delay = self.retry.base_delay * 2u32.pow(attempt);
-                tokio::time::sleep(delay).await;
-                attempt += 1;
-                continue;
             }
-            if !status.is_success() {
-                return Err(JmapError::Status(status.as_u16()));
-            }
-            return Ok(response.bytes().await?.to_vec());
         }
     }
+
+    /// One blob download attempt: any transport error (send or body read)
+    /// surfaces as `JmapError::Http` for the caller's retry decision.
+    async fn download_once(&self, url: &str) -> Result<Vec<u8>, JmapError> {
+        let response = self.http.get(url).bearer_auth(&self.token).send().await?;
+        if !response.status().is_success() {
+            return Err(JmapError::Status(response.status().as_u16()));
+        }
+        Ok(response.bytes().await?.to_vec())
+    }
+}
+
+/// A network error worth retrying: a timeout, a connection failure, or an
+/// error while sending the request. A decode/protocol error is not.
+fn is_transient(e: &reqwest::Error) -> bool {
+    e.is_timeout() || e.is_connect() || e.is_request()
 }

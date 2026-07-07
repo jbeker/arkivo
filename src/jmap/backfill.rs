@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::stream::{self, StreamExt};
 use sqlx::PgPool;
 
 use crate::db::{accounts, messages};
@@ -28,6 +28,10 @@ pub struct BackfillStats {
     pub total: Option<u64>,
     /// Stopped early because cancellation was requested.
     pub cancelled: bool,
+    /// Messages whose metadata landed but whose blob download failed this
+    /// sweep. Their rows carry `maildir_path IS NULL`; `fetch_missing_blobs`
+    /// retries them after the sweep completes.
+    pub failed: u64,
 }
 
 pub struct BackfillOptions {
@@ -103,12 +107,30 @@ pub async fn backfill_account(
         // Owned emails, not `.iter()`: a closure over `&Email` trips
         // rustc's higher-ranked lifetime check (#89976) once this future
         // runs under tokio::spawn for web-triggered jobs.
-        let stored: Vec<bool> = stream::iter(page.emails)
+        //
+        // Collect every result rather than `try_collect`: one blob that
+        // fails even after retries must not abort a sweep of hundreds of
+        // thousands. The metadata row is already persisted (ingest upserts
+        // before downloading), so a failure here is recovered by
+        // `fetch_missing_blobs` once the sweep reaches the end.
+        let results: Vec<Result<bool>> = stream::iter(page.emails)
             .map(|email| async move { ingest_email(pool, client, store, account.id, &email).await })
             .buffer_unordered(DOWNLOAD_CONCURRENCY)
-            .try_collect()
-            .await?;
-        stats.fetched += stored.into_iter().filter(|s| *s).count() as u64;
+            .collect()
+            .await;
+        for result in results {
+            match result {
+                Ok(true) => stats.fetched += 1,
+                Ok(false) => {}
+                Err(e) => {
+                    stats.failed += 1;
+                    tracing::warn!(
+                        error = %format!("{e:#}"),
+                        "backfill: blob ingest failed, deferring to fetch_missing_blobs"
+                    );
+                }
+            }
+        }
 
         // Page durable: advance the resume cursor.
         anchor = page.query.ids.last().cloned();
