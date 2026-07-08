@@ -370,6 +370,12 @@ impl JmapClient {
     /// connection on either the request or the body read. Backfill sweeps
     /// hundreds of thousands of blobs, so a single flaky download must not
     /// be fatal.
+    ///
+    /// Note: reqwest labels *any* body-read failure "error decoding response
+    /// body" — including a read timeout. That is not content decoding (we
+    /// build reqwest without compression and read via `.bytes()`); the true
+    /// cause is in the error's source chain, which the retry log surfaces
+    /// via [`error_chain`].
     pub async fn download_blob(&self, blob_id: &str) -> Result<Vec<u8>, JmapError> {
         let url = self
             .session
@@ -391,7 +397,7 @@ impl JmapClient {
                 Err(e) if !retryable || attempt >= BLOB_MAX_RETRIES => return Err(e),
                 Err(e) => {
                     let delay = self.retry.base_delay * 2u32.pow(attempt);
-                    tracing::warn!(?delay, attempt, error = %e, "blob download failed, retrying");
+                    tracing::warn!(?delay, attempt, error = %error_chain(&e), "blob download failed, retrying");
                     tokio::time::sleep(delay).await;
                     attempt += 1;
                 }
@@ -421,4 +427,67 @@ impl JmapClient {
 /// error while sending the request. A decode/protocol error is not.
 fn is_transient(e: &reqwest::Error) -> bool {
     e.is_timeout() || e.is_connect() || e.is_request()
+}
+
+/// Render an error with its full `source()` chain joined by ": ". reqwest's
+/// top-level Display for a failed body read is the misleading "error
+/// decoding response body for url (...)"; the real cause (e.g. "operation
+/// timed out") lives in the source chain, and `{e:#}` doesn't expose it for
+/// a `thiserror` type. This does.
+fn error_chain(e: &dyn std::error::Error) -> String {
+    let mut out = e.to_string();
+    let mut src = e.source();
+    while let Some(s) = src {
+        out.push_str(": ");
+        out.push_str(&s.to_string());
+        src = s.source();
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::error_chain;
+    use std::error::Error;
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct Layer {
+        msg: &'static str,
+        source: Option<Box<dyn Error>>,
+    }
+    impl fmt::Display for Layer {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.msg)
+        }
+    }
+    impl Error for Layer {
+        fn source(&self) -> Option<&(dyn Error + 'static)> {
+            self.source.as_deref()
+        }
+    }
+
+    #[test]
+    fn error_chain_joins_the_source_chain() {
+        let outer = Layer {
+            msg: "error decoding response body",
+            source: Some(Box::new(Layer {
+                msg: "operation timed out",
+                source: None,
+            })),
+        };
+        assert_eq!(
+            error_chain(&outer),
+            "error decoding response body: operation timed out"
+        );
+    }
+
+    #[test]
+    fn error_chain_single_error_has_no_separator() {
+        let e = Layer {
+            msg: "boom",
+            source: None,
+        };
+        assert_eq!(error_chain(&e), "boom");
+    }
 }
