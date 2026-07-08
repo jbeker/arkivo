@@ -75,6 +75,20 @@ pub async fn running_for_user(pool: &PgPool, user_id: i64) -> Result<Vec<Job>> {
     Ok(jobs)
 }
 
+/// Every running job, regardless of owner. The startup reconciler uses
+/// this to find rows orphaned by a crashed or restarted process. Runtime
+/// query (not the macro) so no new offline metadata is needed to build.
+pub async fn running_all(pool: &PgPool) -> Result<Vec<Job>> {
+    let jobs = sqlx::query_as::<_, Job>(
+        r#"select id, kind, mail_account_id, status, started_at,
+                  finished_at, stats, error
+           from jobs where status = 'running' order by started_at"#,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(jobs)
+}
+
 pub async fn start(pool: &PgPool, kind: &str, mail_account_id: Option<i64>) -> Result<i64> {
     let rec = sqlx::query!(
         "insert into jobs (kind, mail_account_id) values ($1, $2) returning id",

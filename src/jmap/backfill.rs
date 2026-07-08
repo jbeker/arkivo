@@ -180,10 +180,29 @@ pub async fn fetch_missing_blobs(
         if emails.is_empty() {
             return Ok(total);
         }
+        // Tolerate blobs that are still failing: a single wedged message
+        // upstream must not fail an otherwise-complete import. Count how
+        // many we actually recovered this pass.
+        let mut progressed = 0u64;
         for email in &emails {
-            if ingest_email(pool, client, store, mail_account_id, email).await? {
-                total += 1;
+            match ingest_email(pool, client, store, mail_account_id, email).await {
+                Ok(true) => {
+                    total += 1;
+                    progressed += 1;
+                }
+                Ok(false) => {}
+                Err(e) => tracing::warn!(
+                    email = %email.id,
+                    error = %format!("{e:#}"),
+                    "fetch_missing_blobs: blob still failing, leaving deferred"
+                ),
             }
+        }
+        // A pass that recovered nothing means the remainder is wedged
+        // upstream; stop rather than spin. They stay `unfetched` for a
+        // later run (or a manual re-import) to retry.
+        if progressed == 0 {
+            return Ok(total);
         }
     }
 }

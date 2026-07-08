@@ -15,6 +15,15 @@ pub async fn run(config: AppConfig, _args: Args) -> Result<()> {
     let pool = crate::db::connect(&config.database_url).await?;
     crate::db::migrate(&pool).await?;
 
+    // A prior process may have died mid-job, leaving `running` rows that
+    // no one owns. Retire them now so the UI doesn't show a phantom import
+    // that can't be cancelled.
+    match crate::ops::reconcile_orphaned_jobs(&config, &pool).await {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!(count = n, "retired orphaned running jobs at startup"),
+        Err(e) => tracing::error!(error = %format!("{e:#}"), "orphaned-job reconciliation failed"),
+    }
+
     let state = WebState {
         pool: pool.clone(),
         webauthn: Arc::new(build_webauthn(&config)?),

@@ -24,6 +24,17 @@ pub enum JmapError {
     Protocol(String),
 }
 
+/// Blob downloads get a tighter budget than JMAP API calls. A message body
+/// that hasn't finished arriving in this window is almost always a wedged
+/// Fastmail blob, not a merely slow one — the global 120s client timeout
+/// made each such blob cost minutes. Fail fast and defer to
+/// `fetch_missing_blobs`, which keeps the sweep moving and cancellable.
+const BLOB_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(45);
+/// Retries (after the first attempt) for a single blob within a sweep.
+/// A blob failing persistently won't recover this run; a full retry pass
+/// happens later in `fetch_missing_blobs`.
+const BLOB_MAX_RETRIES: u32 = 2;
+
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
     pub max_retries: u32,
@@ -377,7 +388,7 @@ impl JmapClient {
             };
             match result {
                 Ok(bytes) => return Ok(bytes),
-                Err(e) if !retryable || attempt >= self.retry.max_retries => return Err(e),
+                Err(e) if !retryable || attempt >= BLOB_MAX_RETRIES => return Err(e),
                 Err(e) => {
                     let delay = self.retry.base_delay * 2u32.pow(attempt);
                     tracing::warn!(?delay, attempt, error = %e, "blob download failed, retrying");
@@ -388,10 +399,17 @@ impl JmapClient {
         }
     }
 
-    /// One blob download attempt: any transport error (send or body read)
-    /// surfaces as `JmapError::Http` for the caller's retry decision.
+    /// One blob download attempt, on a tighter per-request timeout than the
+    /// JMAP API calls. Any transport error (send or body read) surfaces as
+    /// `JmapError::Http` for the caller's retry decision.
     async fn download_once(&self, url: &str) -> Result<Vec<u8>, JmapError> {
-        let response = self.http.get(url).bearer_auth(&self.token).send().await?;
+        let response = self
+            .http
+            .get(url)
+            .bearer_auth(&self.token)
+            .timeout(BLOB_DOWNLOAD_TIMEOUT)
+            .send()
+            .await?;
         if !response.status().is_success() {
             return Err(JmapError::Status(response.status().as_u16()));
         }

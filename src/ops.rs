@@ -212,6 +212,43 @@ async fn execute(
     }
 }
 
+/// The advisory-lock family a persisted job kind belongs to, mirroring
+/// [`JobKind::lock_name`] for a kind read back from the database.
+fn lock_family_for_kind(kind: &str) -> Option<&'static str> {
+    match kind {
+        "backfill" | "poll" => Some("sync"),
+        "promote" | "reindex" => Some("promote"),
+        _ => None,
+    }
+}
+
+/// Mark jobs left `running` by a crashed or restarted process as failed.
+/// Safe across containers: a job counts as orphaned only if its advisory
+/// lock is free — i.e. no process is actually running it. A job a live
+/// worker still holds keeps its lock, so we leave it untouched. Call once
+/// at web startup, before the server accepts requests.
+pub async fn reconcile_orphaned_jobs(config: &AppConfig, pool: &PgPool) -> Result<u64> {
+    let mut cleaned = 0u64;
+    for job in jobs::running_all(pool).await? {
+        let (Some(account_id), Some(family)) =
+            (job.mail_account_id, lock_family_for_kind(&job.kind))
+        else {
+            continue;
+        };
+        // Acquiring the lock proves nobody is running this family for the
+        // account; release it immediately and retire the orphaned row.
+        if let Some(lock) =
+            AdvisoryLock::try_acquire(&config.database_url, family, account_id).await?
+        {
+            lock.release().await?;
+            jobs::fail(pool, job.id, "interrupted by service restart").await?;
+            cleaned += 1;
+            tracing::warn!(job = job.id, kind = %job.kind, "reconciled orphaned running job");
+        }
+    }
+    Ok(cleaned)
+}
+
 /// Detached execution for web-triggered jobs: logs failures instead of
 /// propagating (the jobs row carries the error for the UI).
 pub fn spawn_detached(config: AppConfig, pool: PgPool, started: StartedJob) {
