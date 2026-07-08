@@ -21,8 +21,21 @@ pub struct RankedResult {
     pub score: f32,
     /// Best-ranked chunk text (semantic snippet), if kNN surfaced one.
     pub chunk_snippet: Option<String>,
-    /// Message-index source document, if BM25 surfaced it.
+    /// Query-term highlight fragments, if BM25 surfaced the message.
+    pub highlight: Option<String>,
+    /// Message-index source document; hybrid_search hydrates kNN-only
+    /// hits so this is present on every returned result.
     pub msg_source: Option<Value>,
+}
+
+/// One page of fused results plus pagination metadata.
+#[derive(Debug, Clone)]
+pub struct HybridResults {
+    pub results: Vec<RankedResult>,
+    /// Total keyword-side matches: exact for BM25, a floor for the fused
+    /// ranking (semantic-only hits aren't counted by the index).
+    pub total: i64,
+    pub has_more: bool,
 }
 
 /// Reciprocal rank fusion over two ranked lists keyed by message_id.
@@ -38,9 +51,11 @@ pub fn rrf_fuse(bm25: &[Hit], knn: &[Hit], limit: usize) -> Vec<RankedResult> {
                 message_id: hit.message_id.clone(),
                 score: 0.0,
                 chunk_snippet: None,
+                highlight: None,
                 msg_source: None,
             });
         entry.score += 1.0 / (RRF_K + rank as f32 + 1.0);
+        entry.highlight = hit.highlight.clone();
         entry.msg_source = Some(hit.source.clone());
     }
 
@@ -58,6 +73,7 @@ pub fn rrf_fuse(bm25: &[Hit], knn: &[Hit], limit: usize) -> Vec<RankedResult> {
                 message_id: hit.message_id.clone(),
                 score: 0.0,
                 chunk_snippet: None,
+                highlight: None,
                 msg_source: None,
             });
         entry.score += 1.0 / (RRF_K + rank as f32 + 1.0);
@@ -81,23 +97,51 @@ pub fn rrf_fuse(bm25: &[Hit], knn: &[Hit], limit: usize) -> Vec<RankedResult> {
     ranked
 }
 
-/// Run both retrievals in parallel and fuse. `depth` controls how far
-/// down each list contributes to fusion.
+/// Run both retrievals in parallel, fuse, page, and hydrate. `offset`
+/// skips fused results for pagination; fetch depth scales with the page
+/// end so later pages stay stable-ish.
 pub async fn hybrid_search(
     search: &SearchClient,
     embedder: &dyn EmbeddingProvider,
     user_id: i64,
     query: &str,
     limit: usize,
+    offset: usize,
     filter: &SearchFilter,
-) -> Result<Vec<RankedResult>> {
-    let depth = (limit * 4).max(20);
+) -> Result<HybridResults> {
+    let depth = ((offset + limit) * 4).max(20);
     let vector = embedder.embed_query(query).await?;
     let (bm25, knn) = try_join!(
         search.bm25_search(user_id, query, depth, filter),
         search.knn_search(user_id, &vector, depth, filter),
     )?;
-    Ok(rrf_fuse(&bm25, &knn, limit))
+    // Fuse one past the page end: an exact has-more signal for the page
+    // without trusting the (BM25-only) total.
+    let mut fused = rrf_fuse(&bm25.hits, &knn, offset + limit + 1);
+    let has_more = fused.len() > offset + limit;
+    fused.truncate(offset + limit);
+    let mut results: Vec<RankedResult> = fused.into_iter().skip(offset).collect();
+
+    // Hydrate kNN-only hits so every result carries full msg metadata.
+    let missing: Vec<&str> = results
+        .iter()
+        .filter(|r| r.msg_source.is_none())
+        .map(|r| r.message_id.as_str())
+        .collect();
+    if !missing.is_empty() {
+        let docs = search.mget_msg_docs(user_id, &missing).await?;
+        for result in &mut results {
+            if result.msg_source.is_none() {
+                result.msg_source = docs.get(&result.message_id).cloned();
+            }
+        }
+    }
+
+    Ok(HybridResults {
+        results,
+        total: bm25.total,
+        has_more,
+    })
 }
 
 #[cfg(test)]
@@ -110,6 +154,7 @@ mod tests {
             message_id: message_id.into(),
             score: 1.0,
             source,
+            highlight: None,
         }
     }
 

@@ -66,11 +66,11 @@ services:
     image: arkivo:latest
     restart: unless-stopped
     command: ["serve-mcp"]
+    # No master_key secret: serve-mcp never unseals credentials (spec §16 —
+    # the MCP server must not be able to reach the Fastmail token).
     environment: *arkivo-env
     ports:
       - "127.0.0.1:8081:8081"
-    secrets:
-      - master_key
     depends_on:
       postgres:
         condition: service_healthy

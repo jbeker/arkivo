@@ -149,7 +149,7 @@ impl McpHarness {
 }
 
 #[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
-async fn tools_list_requires_auth_and_shows_three_tools(pool: PgPool) {
+async fn tools_list_requires_auth_and_shows_four_tools(pool: PgPool) {
     let search = require_opensearch!();
     let user = unique_user(&pool, "alice").await;
     let generated = arkivo::crypto::generate_token("mcp");
@@ -182,9 +182,44 @@ async fn tools_list_requires_auth_and_shows_three_tools(pool: PgPool) {
         .iter()
         .filter_map(|t| t.get("name").and_then(Value::as_str))
         .collect();
-    assert_eq!(tools.len(), 3);
-    for expected in ["search", "get_message", "list_facets"] {
+    assert_eq!(tools.len(), 4);
+    for expected in ["search", "get_message", "get_thread", "list_facets"] {
         assert!(tools.contains(&expected), "missing tool {expected}");
+    }
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn internal_errors_are_generic_to_mcp_clients(pool: PgPool) {
+    // No OpenSearch needed: a dead backend forces the internal-error
+    // path, whose payload must not leak backend error text.
+    let user = unique_user(&pool, "alice").await;
+    let generated = arkivo::crypto::generate_token("mcp");
+    tokens::mint(&pool, user, &generated.hash, "t")
+        .await
+        .unwrap();
+
+    let dead = SearchClient::new(&OpenSearchConfig {
+        url: "http://127.0.0.1:1".into(),
+        username: None,
+        password: None,
+    })
+    .unwrap();
+    let h = McpHarness::start(pool, dead).await;
+
+    let (status, value) = h
+        .call_tool(&generated.token, "search", json!({"query": "anything"}))
+        .await;
+    assert_eq!(status, 200, "JSON-RPC carries the error in-band: {value}");
+    let text = value.to_string();
+    assert!(
+        text.contains("internal error"),
+        "generic message expected: {value}"
+    );
+    for leak in ["Connection refused", "127.0.0.1:1", "OpenSearch"] {
+        assert!(
+            !text.contains(leak),
+            "leaked backend detail {leak:?}: {value}"
+        );
     }
 }
 
@@ -403,6 +438,216 @@ async fn revoked_token_is_rejected(pool: PgPool) {
         .call_tool(&generated.token, "list_facets", json!({"facet": "year"}))
         .await;
     assert_eq!(status, 401, "revoked token must be rejected");
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn date_sorted_search_paginates_with_totals(pool: PgPool) {
+    let search = require_opensearch!();
+    let embedder = FakeEmbedder::default();
+    let user = unique_user(&pool, "alice").await;
+    search
+        .ensure_user_indices(user, embedder.dimension())
+        .await
+        .unwrap();
+    let indexer = Indexer {
+        search: &search,
+        embedder: &embedder,
+    };
+    for (id, year) in [(401, 2016), (402, 2019), (403, 2022)] {
+        let mut m = msg(id, "yearly summary");
+        m.received_at = Utc.with_ymd_and_hms(year, 7, 1, 0, 0, 0).unwrap();
+        indexer
+            .index_message(user, &m, &email("yearly summary", "summary body"), true)
+            .await
+            .unwrap();
+    }
+    search.refresh_user_indices(user).await.unwrap();
+
+    let generated = arkivo::crypto::generate_token("mcp");
+    tokens::mint(&pool, user, &generated.hash, "t")
+        .await
+        .unwrap();
+    let h = McpHarness::start(pool.clone(), search_client().unwrap()).await;
+
+    // Query-less browse, newest first, page size 2.
+    let (status, value) = h
+        .call_tool(
+            &generated.token,
+            "search",
+            json!({"sort": "date_desc", "limit": 2}),
+        )
+        .await;
+    assert_eq!(status, 200);
+    let content = value.pointer("/result/structuredContent").unwrap();
+    assert_eq!(content.get("total").and_then(Value::as_i64), Some(3));
+    assert_eq!(content.get("has_more").and_then(Value::as_bool), Some(true));
+    let ids: Vec<&str> = content
+        .get("results")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .filter_map(|r| r.get("message_id").and_then(Value::as_str))
+        .collect();
+    assert_eq!(ids, vec!["403", "402"], "newest first: {value}");
+
+    // Second page.
+    let (_, value) = h
+        .call_tool(
+            &generated.token,
+            "search",
+            json!({"sort": "date_desc", "limit": 2, "offset": 2}),
+        )
+        .await;
+    let content = value.pointer("/result/structuredContent").unwrap();
+    assert_eq!(
+        content.get("has_more").and_then(Value::as_bool),
+        Some(false)
+    );
+    let ids: Vec<&str> = content
+        .get("results")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .filter_map(|r| r.get("message_id").and_then(Value::as_str))
+        .collect();
+    assert_eq!(ids, vec!["401"]);
+
+    // Date filter narrows the same browse.
+    let (_, value) = h
+        .call_tool(
+            &generated.token,
+            "search",
+            json!({"received_after": "2018-01-01", "received_before": "2020-12-31"}),
+        )
+        .await;
+    let content = value.pointer("/result/structuredContent").unwrap();
+    assert_eq!(content.get("total").and_then(Value::as_i64), Some(1));
+    let ids: Vec<&str> = content
+        .get("results")
+        .and_then(Value::as_array)
+        .unwrap()
+        .iter()
+        .filter_map(|r| r.get("message_id").and_then(Value::as_str))
+        .collect();
+    assert_eq!(ids, vec!["402"]);
+
+    // Bad inputs are rejected as invalid params.
+    let (_, value) = h
+        .call_tool(
+            &generated.token,
+            "search",
+            json!({"received_after": "not-a-date"}),
+        )
+        .await;
+    assert!(
+        value.to_string().contains("invalid date"),
+        "date validation: {value}"
+    );
+    let (_, value) = h
+        .call_tool(&generated.token, "search", json!({"sort": "relevance"}))
+        .await;
+    assert!(
+        value.to_string().contains("requires a query"),
+        "relevance without query: {value}"
+    );
+
+    search.delete_user_indices(user).await.unwrap();
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn get_thread_returns_conversation_and_stays_scoped(pool: PgPool) {
+    let search = require_opensearch!();
+    let embedder = FakeEmbedder::default();
+    let user_a = unique_user(&pool, "alice").await;
+    let user_b = unique_user(&pool, "bob").await;
+    for user in [user_a, user_b] {
+        search
+            .ensure_user_indices(user, embedder.dimension())
+            .await
+            .unwrap();
+    }
+    let indexer = Indexer {
+        search: &search,
+        embedder: &embedder,
+    };
+    // A's conversation, indexed out of date order.
+    for (id, day, body) in [(502, 12, "second reply"), (501, 10, "opening message")] {
+        let mut m = msg(id, "thread subject");
+        m.thread_id = Some("conv-1".into());
+        m.received_at = Utc.with_ymd_and_hms(2019, 8, day, 0, 0, 0).unwrap();
+        indexer
+            .index_message(user_a, &m, &email("thread subject", body), true)
+            .await
+            .unwrap();
+    }
+    // B has a thread with the SAME id value in his own index.
+    let mut m = msg(601, "bob thread");
+    m.thread_id = Some("conv-1".into());
+    indexer
+        .index_message(user_b, &m, &email("bob thread", "bob content"), true)
+        .await
+        .unwrap();
+    for user in [user_a, user_b] {
+        search.refresh_user_indices(user).await.unwrap();
+    }
+
+    let token_a = arkivo::crypto::generate_token("mcp");
+    let minted_a = tokens::mint(&pool, user_a, &token_a.hash, "a")
+        .await
+        .unwrap();
+    let h = McpHarness::start(pool.clone(), search_client().unwrap()).await;
+
+    let (status, value) = h
+        .call_tool(&token_a.token, "get_thread", json!({"thread_id": "conv-1"}))
+        .await;
+    assert_eq!(status, 200);
+    let messages = value
+        .pointer("/result/structuredContent/messages")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("unexpected shape: {value}"));
+    let ids: Vec<&str> = messages
+        .iter()
+        .filter_map(|m| m.get("message_id").and_then(Value::as_str))
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["501", "502"],
+        "A's thread only, oldest first: {value}"
+    );
+    assert!(
+        messages
+            .iter()
+            .all(|m| m.get("message_id").and_then(Value::as_str) != Some("601")),
+        "B's same-id thread must not leak: {value}"
+    );
+    assert_eq!(
+        messages[0].get("body_text").and_then(Value::as_str),
+        Some("opening message")
+    );
+
+    // Unknown thread: not found, and the probe is audited.
+    let (_, value) = h
+        .call_tool(
+            &token_a.token,
+            "get_thread",
+            json!({"thread_id": "no-such-thread"}),
+        )
+        .await;
+    let err = value.pointer("/result/isError").and_then(Value::as_bool) == Some(true)
+        || value.get("error").is_some();
+    assert!(err, "missing thread must fail: {value}");
+
+    let entries = audit::recent_for_user(&pool, user_a, 20).await.unwrap();
+    let actor = format!("mcp:{}", minted_a.id);
+    assert!(
+        entries.iter().any(|e| e.actor == actor
+            && e.action == "get_thread"
+            && e.message_ref.as_deref() == Some("no-such-thread")),
+        "thread probes must leave an audit trail"
+    );
+
+    search.delete_user_indices(user_a).await.unwrap();
+    search.delete_user_indices(user_b).await.unwrap();
 }
 
 #[sqlx::test(migrator = "arkivo::db::MIGRATOR")]

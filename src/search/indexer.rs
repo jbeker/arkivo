@@ -12,8 +12,9 @@ use crate::search::client::SearchClient;
 
 /// Bumped whenever extraction/sanitization behavior changes, so a
 /// reindex can tell stale documents from current ones. v2 denormalizes
-/// from/to/cc into chunk docs for filtered kNN.
-pub const PIPELINE_VERSION: i32 = 2;
+/// from/to/cc into chunk docs for filtered kNN; v3 adds received_at to
+/// chunk docs for date-filtered kNN.
+pub const PIPELINE_VERSION: i32 = 3;
 
 pub struct Indexer<'a> {
     pub search: &'a SearchClient,
@@ -66,7 +67,15 @@ impl Indexer<'_> {
             .collect();
         let count = chunks.len();
         self.search
-            .bulk_chunks(user_id, msg.id, &chunks, &email.from, &email.to, &email.cc)
+            .bulk_chunks(
+                user_id,
+                msg.id,
+                &chunks,
+                &email.from,
+                &email.to,
+                &email.cc,
+                &msg.received_at.to_rfc3339(),
+            )
             .await?;
         Ok(IndexOutcome { chunks: count })
     }

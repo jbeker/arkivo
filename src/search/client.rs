@@ -23,6 +23,16 @@ pub struct Hit {
     pub message_id: String,
     pub score: f32,
     pub source: Value,
+    /// Query-term-centered fragments (plain text, " … "-joined) when the
+    /// request asked for highlighting.
+    pub highlight: Option<String>,
+}
+
+/// One page of hits plus the index-side total match count.
+#[derive(Debug, Clone)]
+pub struct SearchPage {
+    pub hits: Vec<Hit>,
+    pub total: i64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -30,21 +40,28 @@ pub enum FacetKind {
     From,
     Mailbox,
     Year,
+    Month,
 }
 
-/// Optional exact-match constraint on sender/recipient addresses, applied
-/// alongside the hybrid query. Each field is a single bare address; when
-/// several are set they combine with AND. Empty means "no constraint".
+/// Optional constraints applied alongside the query: exact-match
+/// sender/recipient addresses (AND-combined) and a received_at range
+/// (RFC3339 instants, inclusive). Empty means "no constraint".
 #[derive(Debug, Clone, Default)]
 pub struct SearchFilter {
     pub from: Option<String>,
     pub to: Option<String>,
     pub cc: Option<String>,
+    pub received_after: Option<String>,
+    pub received_before: Option<String>,
 }
 
 impl SearchFilter {
     pub fn is_empty(&self) -> bool {
-        self.from.is_none() && self.to.is_none() && self.cc.is_none()
+        self.from.is_none()
+            && self.to.is_none()
+            && self.cc.is_none()
+            && self.received_after.is_none()
+            && self.received_before.is_none()
     }
 
     /// AND-combined `term` clauses in from/to/cc order. `suffix` is ".raw"
@@ -59,6 +76,29 @@ impl SearchFilter {
                     .map(|value| json!({"term": {(format!("{field}{suffix}")): value}}))
             })
             .collect()
+    }
+
+    /// Inclusive range clause on received_at, when either bound is set.
+    /// Both indices map received_at as `date` (chunk docs since pipeline v3).
+    fn range_clause(&self) -> Option<Value> {
+        if self.received_after.is_none() && self.received_before.is_none() {
+            return None;
+        }
+        let mut range = serde_json::Map::new();
+        if let Some(after) = &self.received_after {
+            range.insert("gte".into(), json!(after));
+        }
+        if let Some(before) = &self.received_before {
+            range.insert("lte".into(), json!(before));
+        }
+        Some(json!({"range": {"received_at": range}}))
+    }
+
+    /// All filter clauses for one index flavor (see `term_clauses`).
+    fn clauses(&self, suffix: &str) -> Vec<Value> {
+        let mut clauses = self.term_clauses(suffix);
+        clauses.extend(self.range_clause());
+        clauses
     }
 }
 
@@ -115,7 +155,7 @@ impl SearchClient {
             .await?;
         let status = response.status();
         if status.as_u16() == 404 {
-            return Ok(json!({"hits": {"hits": []}}));
+            return Ok(json!({"hits": {"hits": [], "total": {"value": 0}}}));
         }
         let value: Value = response.json().await.unwrap_or(Value::Null);
         anyhow::ensure!(
@@ -189,6 +229,7 @@ impl SearchClient {
 
     /// Bulk-upsert chunk documents, keyed `{message_id}:{chunk_index}` so
     /// a reindex overwrite is idempotent.
+    #[allow(clippy::too_many_arguments)]
     pub async fn bulk_chunks(
         &self,
         user_id: i64,
@@ -197,6 +238,7 @@ impl SearchClient {
         from: &[String],
         to: &[String],
         cc: &[String],
+        received_at: &str,
     ) -> Result<()> {
         if chunks.is_empty() {
             return Ok(());
@@ -218,6 +260,7 @@ impl SearchClient {
                     "from": from,
                     "to": to,
                     "cc": cc,
+                    "received_at": received_at,
                 })
                 .to_string(),
             );
@@ -292,10 +335,22 @@ impl SearchClient {
                             .and_then(Value::as_str)
                             .map(String::from)
                             .or_else(|| h.get("_id").and_then(Value::as_str).map(String::from))?;
+                        let highlight = h
+                            .pointer("/highlight/body_text")
+                            .and_then(Value::as_array)
+                            .map(|frags| {
+                                frags
+                                    .iter()
+                                    .filter_map(Value::as_str)
+                                    .collect::<Vec<_>>()
+                                    .join(" … ")
+                            })
+                            .filter(|s| !s.is_empty());
                         Some(Hit {
                             message_id,
                             score: h.get("_score").and_then(Value::as_f64).unwrap_or(0.0) as f32,
                             source,
+                            highlight,
                         })
                     })
                     .collect()
@@ -303,43 +358,181 @@ impl SearchClient {
             .unwrap_or_default()
     }
 
-    /// BM25 over subject and body in the message index, optionally
-    /// constrained by an exact sender/recipient filter (on the `.raw`
-    /// keyword sub-fields). An empty filter yields a no-op `filter: []`.
+    fn parse_total(value: &Value) -> i64 {
+        value
+            .pointer("/hits/total/value")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+    }
+
+    /// Plain-text fragment highlighting on body_text: no tags — agents
+    /// consume the fragments as-is.
+    fn highlight_block() -> Value {
+        json!({
+            "fields": {"body_text": {}},
+            "fragment_size": 200,
+            "number_of_fragments": 2,
+            "pre_tags": [""],
+            "post_tags": [""],
+        })
+    }
+
+    /// BM25 over subject, body, and participants in the message index,
+    /// optionally constrained by address/date filters. Returns hits with
+    /// plain-text highlight fragments plus the exact total match count.
     pub async fn bm25_search(
         &self,
         user_id: i64,
         query: &str,
         size: usize,
         filter: &SearchFilter,
-    ) -> Result<Vec<Hit>> {
+    ) -> Result<SearchPage> {
         let index = mappings::msg_index_name(user_id);
         let value = self
             .search(
                 &index,
                 &json!({
                     "size": size,
+                    "track_total_hits": true,
+                    "highlight": Self::highlight_block(),
                     "query": {
                         "bool": {
                             "must": {
                                 "multi_match": {
                                     "query": query,
-                                    "fields": ["subject^2", "body_text", "from", "to"],
+                                    "fields": ["subject^2", "body_text", "from", "to", "cc"],
                                 }
                             },
-                            "filter": filter.term_clauses(".raw"),
+                            "filter": filter.clauses(".raw"),
                         }
                     }
                 }),
             )
             .await?;
-        Ok(Self::parse_hits(&value, "message_id"))
+        Ok(SearchPage {
+            hits: Self::parse_hits(&value, "message_id"),
+            total: Self::parse_total(&value),
+        })
+    }
+
+    /// Date-ordered listing over the message index: optional keyword
+    /// query, address/date filters, and offset pagination. This is the
+    /// non-hybrid path behind `sort: date_desc | date_asc` and behind
+    /// query-less filter browsing.
+    pub async fn list_messages(
+        &self,
+        user_id: i64,
+        query: Option<&str>,
+        filter: &SearchFilter,
+        size: usize,
+        offset: usize,
+        ascending: bool,
+    ) -> Result<SearchPage> {
+        let index = mappings::msg_index_name(user_id);
+        let must = match query {
+            Some(q) if !q.trim().is_empty() => json!({
+                "multi_match": {
+                    "query": q,
+                    "fields": ["subject^2", "body_text", "from", "to", "cc"],
+                }
+            }),
+            _ => json!({"match_all": {}}),
+        };
+        let order = if ascending { "asc" } else { "desc" };
+        let mut body = json!({
+            "size": size,
+            "from": offset,
+            "track_total_hits": true,
+            "sort": [
+                {"received_at": {"order": order}},
+                {"message_id": {"order": "asc"}},
+            ],
+            "query": {"bool": {"must": must, "filter": filter.clauses(".raw")}},
+        });
+        if query.is_some_and(|q| !q.trim().is_empty()) {
+            body["highlight"] = Self::highlight_block();
+        }
+        let value = self.search(&index, &body).await?;
+        Ok(SearchPage {
+            hits: Self::parse_hits(&value, "message_id"),
+            total: Self::parse_total(&value),
+        })
+    }
+
+    /// Every message of one thread, oldest first. Returns the raw msg
+    /// documents (same shape get_msg_doc yields).
+    pub async fn thread_messages(
+        &self,
+        user_id: i64,
+        thread_id: &str,
+        limit: usize,
+    ) -> Result<Vec<Value>> {
+        let index = mappings::msg_index_name(user_id);
+        let value = self
+            .search(
+                &index,
+                &json!({
+                    "size": limit,
+                    "sort": [
+                        {"received_at": {"order": "asc"}},
+                        {"message_id": {"order": "asc"}},
+                    ],
+                    "query": {"term": {"thread_id": thread_id}},
+                }),
+            )
+            .await?;
+        Ok(value
+            .pointer("/hits/hits")
+            .and_then(Value::as_array)
+            .map(|hits| {
+                hits.iter()
+                    .filter_map(|h| h.get("_source").cloned())
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Fetch several msg documents by id in one round trip, keyed by id.
+    /// Used to hydrate kNN-only hits with full message metadata.
+    pub async fn mget_msg_docs(
+        &self,
+        user_id: i64,
+        ids: &[&str],
+    ) -> Result<std::collections::HashMap<String, Value>> {
+        if ids.is_empty() {
+            return Ok(Default::default());
+        }
+        let index = mappings::msg_index_name(user_id);
+        let response = self
+            .request(Method::POST, &format!("/{index}/_mget"))
+            .json(&json!({"ids": ids}))
+            .send()
+            .await?;
+        let status = response.status();
+        if status.as_u16() == 404 {
+            return Ok(Default::default());
+        }
+        let value: Value = response.json().await.unwrap_or(Value::Null);
+        anyhow::ensure!(status.is_success(), "_mget returned {status}: {value}");
+        Ok(value
+            .get("docs")
+            .and_then(Value::as_array)
+            .map(|docs| {
+                docs.iter()
+                    .filter_map(|d| {
+                        let id = d.get("_id").and_then(Value::as_str)?;
+                        Some((id.to_string(), d.get("_source")?.clone()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     /// kNN over chunk vectors; hits carry their chunk text for snippets.
     /// A non-empty filter is applied natively via the Lucene engine's
     /// `knn` `filter` clause (on the chunk index's plain-keyword address
-    /// fields), keeping the semantic half consistent with BM25.
+    /// fields and its received_at date, pipeline v3), keeping the
+    /// semantic half consistent with BM25.
     pub async fn knn_search(
         &self,
         user_id: i64,
@@ -349,7 +542,7 @@ impl SearchClient {
     ) -> Result<Vec<Hit>> {
         let index = mappings::chunk_index_name(user_id);
         let mut embedding = json!({"vector": vector, "k": k});
-        let clauses = filter.term_clauses("");
+        let clauses = filter.clauses("");
         if !clauses.is_empty() {
             embedding["filter"] = json!({"bool": {"filter": clauses}});
         }
@@ -366,12 +559,16 @@ impl SearchClient {
     }
 
     /// Facet aggregation over the message index (spec §9 list_facets):
-    /// top senders, mailbox distribution, or per-year message counts.
+    /// top senders, mailbox distribution, or per-year/month counts —
+    /// optionally scoped to a keyword query and address/date filters
+    /// ("top senders among messages matching X").
     pub async fn facets(
         &self,
         user_id: i64,
         kind: FacetKind,
         size: usize,
+        query: Option<&str>,
+        filter: &SearchFilter,
     ) -> Result<Vec<FacetBucket>> {
         let index = mappings::msg_index_name(user_id);
         let aggs = match kind {
@@ -385,9 +582,33 @@ impl SearchClient {
                     "min_doc_count": 1,
                 }
             }}),
+            FacetKind::Month => json!({"f": {
+                "date_histogram": {
+                    "field": "received_at",
+                    "calendar_interval": "month",
+                    "format": "yyyy-MM",
+                    "min_doc_count": 1,
+                }
+            }}),
+        };
+        let must = match query {
+            Some(q) if !q.trim().is_empty() => json!({
+                "multi_match": {
+                    "query": q,
+                    "fields": ["subject^2", "body_text", "from", "to", "cc"],
+                }
+            }),
+            _ => json!({"match_all": {}}),
         };
         let value = self
-            .search(&index, &json!({"size": 0, "aggs": aggs}))
+            .search(
+                &index,
+                &json!({
+                    "size": 0,
+                    "query": {"bool": {"must": must, "filter": filter.clauses(".raw")}},
+                    "aggs": aggs,
+                }),
+            )
             .await?;
         let buckets = value
             .pointer("/aggregations/f/buckets")
@@ -461,6 +682,7 @@ mod tests {
             from: Some("a@x.com".into()),
             to: Some("b@x.com".into()),
             cc: Some("c@x.com".into()),
+            ..Default::default()
         };
         assert_eq!(
             f.term_clauses(".raw"),
@@ -469,6 +691,41 @@ mod tests {
                 json!({"term": {"to.raw": "b@x.com"}}),
                 json!({"term": {"cc.raw": "c@x.com"}}),
             ]
+        );
+    }
+
+    #[test]
+    fn date_bounds_become_an_inclusive_range_clause() {
+        let f = SearchFilter {
+            received_after: Some("2019-01-01T00:00:00+00:00".into()),
+            received_before: Some("2019-12-31T23:59:59.999Z".into()),
+            ..Default::default()
+        };
+        assert!(!f.is_empty());
+        assert_eq!(
+            f.clauses(".raw"),
+            vec![json!({"range": {"received_at": {
+                "gte": "2019-01-01T00:00:00+00:00",
+                "lte": "2019-12-31T23:59:59.999Z",
+            }}})]
+        );
+        // Filter shape is identical on the chunk index.
+        assert_eq!(f.clauses(""), f.clauses(".raw"));
+    }
+
+    #[test]
+    fn terms_and_range_combine() {
+        let f = SearchFilter {
+            from: Some("a@x.com".into()),
+            received_after: Some("2020-06-01T00:00:00Z".into()),
+            ..Default::default()
+        };
+        let clauses = f.clauses(".raw");
+        assert_eq!(clauses.len(), 2);
+        assert_eq!(clauses[0], json!({"term": {"from.raw": "a@x.com"}}));
+        assert_eq!(
+            clauses[1],
+            json!({"range": {"received_at": {"gte": "2020-06-01T00:00:00Z"}}})
         );
     }
 }

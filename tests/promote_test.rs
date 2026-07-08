@@ -280,7 +280,8 @@ async fn reset_links_are_redacted_in_index(pool: PgPool) {
             &SearchFilter::default(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .hits;
     assert_eq!(hits.len(), 1);
     let body = hits[0].source.get("body_text").unwrap().as_str().unwrap();
     assert!(
@@ -355,7 +356,8 @@ async fn quarantined_sender_never_reaches_index(pool: PgPool) {
     let hits = search
         .bm25_search(fx.account.user_id, "balance", 10, &SearchFilter::default())
         .await
-        .unwrap();
+        .unwrap()
+        .hits;
     assert!(
         hits.is_empty(),
         "quarantined content must not be searchable"
@@ -411,7 +413,8 @@ async fn duplicate_message_id_is_not_reembedded(pool: PgPool) {
             &SearchFilter::default(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .hits;
     assert_eq!(hits.len(), 1, "only one copy indexed");
 
     search

@@ -16,7 +16,7 @@ use webauthn_rs::prelude::{
     RegisterPublicKeyCredential, RequestChallengeResponse,
 };
 
-use super::{CurrentUser, SESSION_USER_KEY, WebState};
+use super::{CurrentUser, SESSION_AUTH_AT_KEY, SESSION_USER_KEY, WebState};
 use crate::crypto::hash_token;
 use crate::db::{audit, auth, users};
 
@@ -271,6 +271,12 @@ async fn register_finish(
             if let Err(e) = session.insert(SESSION_USER_KEY, user_id).await {
                 return internal(e);
             }
+            if let Err(e) = session
+                .insert(SESSION_AUTH_AT_KEY, chrono::Utc::now().timestamp())
+                .await
+            {
+                return internal(e);
+            }
             let _ = audit::record(
                 &state.pool,
                 Some(user_id),
@@ -379,6 +385,12 @@ async fn login_finish(
 
     let _ = session.cycle_id().await;
     if let Err(e) = session.insert(SESSION_USER_KEY, ctx.user_id).await {
+        return internal(e);
+    }
+    if let Err(e) = session
+        .insert(SESSION_AUTH_AT_KEY, chrono::Utc::now().timestamp())
+        .await
+    {
         return internal(e);
     }
     let _ = audit::record(

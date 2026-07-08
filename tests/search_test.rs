@@ -105,13 +105,12 @@ async fn search_on_missing_indices_returns_empty() {
     let user_id = test_user_id(); // no ensure_user_indices — indices absent
     let embedder = FakeEmbedder::default();
 
-    assert!(
-        search
-            .bm25_search(user_id, "anything", 10, &SearchFilter::default())
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    let page = search
+        .bm25_search(user_id, "anything", 10, &SearchFilter::default())
+        .await
+        .unwrap();
+    assert!(page.hits.is_empty());
+    assert_eq!(page.total, 0);
     let vector = embedder.embed_query("anything").await.unwrap();
     assert!(
         search
@@ -122,7 +121,25 @@ async fn search_on_missing_indices_returns_empty() {
     );
     assert!(
         search
-            .facets(user_id, arkivo::search::client::FacetKind::Year, 20)
+            .facets(
+                user_id,
+                arkivo::search::client::FacetKind::Year,
+                20,
+                None,
+                &SearchFilter::default(),
+            )
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let page = search
+        .list_messages(user_id, None, &SearchFilter::default(), 10, 0, false)
+        .await
+        .unwrap();
+    assert!(page.hits.is_empty());
+    assert!(
+        search
+            .thread_messages(user_id, "t1", 10)
             .await
             .unwrap()
             .is_empty()
@@ -166,13 +183,19 @@ async fn index_and_search_bm25_and_knn() {
         .unwrap();
     search.refresh_user_indices(user_id).await.unwrap();
 
-    // BM25 finds the budget message by keyword.
-    let hits = search
+    // BM25 finds the budget message by keyword, with an exact total and
+    // a plain-text highlight fragment containing the query term.
+    let page = search
         .bm25_search(user_id, "reimbursement", 10, &SearchFilter::default())
         .await
         .unwrap();
+    assert_eq!(page.total, 1);
+    let hits = page.hits;
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].message_id, "1");
+    let highlight = hits[0].highlight.as_deref().expect("highlight fragment");
+    assert!(highlight.contains("reimbursement"));
+    assert!(!highlight.contains("<em>"), "plain text, no tags");
 
     // kNN with the exact chunk text returns that chunk first
     // (FakeEmbedder: identical text = identical vector).
@@ -228,16 +251,21 @@ async fn hybrid_fuses_across_both_indices() {
         user_id,
         body,
         5,
+        0,
         &SearchFilter::default(),
     )
     .await
-    .unwrap();
+    .unwrap()
+    .results;
     assert!(!results.is_empty());
     assert_eq!(
         results[0].message_id, "10",
         "keyword+vector agreement must win"
     );
-    assert!(results[0].chunk_snippet.is_some() || results[0].msg_source.is_some());
+    assert!(
+        results.iter().all(|r| r.msg_source.is_some()),
+        "every fused result is hydrated with msg metadata"
+    );
 
     search.delete_user_indices(user_id).await.unwrap();
 }
@@ -271,7 +299,8 @@ async fn reindex_overwrite_is_idempotent_and_delete_removes_docs() {
     let hits = search
         .bm25_search(user_id, "indexed twice", 10, &SearchFilter::default())
         .await
-        .unwrap();
+        .unwrap()
+        .hits;
     assert_eq!(hits.len(), 1, "doc-id upsert, not duplication");
 
     search.delete_message_docs(user_id, msg.id).await.unwrap();
@@ -279,7 +308,8 @@ async fn reindex_overwrite_is_idempotent_and_delete_removes_docs() {
     let hits = search
         .bm25_search(user_id, "indexed twice", 10, &SearchFilter::default())
         .await
-        .unwrap();
+        .unwrap()
+        .hits;
     assert!(hits.is_empty());
     assert!(search.get_msg_doc(user_id, msg.id).await.unwrap().is_none());
 
@@ -319,8 +349,17 @@ async fn user_indices_are_isolated() {
     let hits = search
         .bm25_search(user_b, "alpha", 10, &SearchFilter::default())
         .await
-        .unwrap();
+        .unwrap()
+        .hits;
     assert!(hits.is_empty(), "user B must never see user A's documents");
+    assert!(
+        search
+            .thread_messages(user_b, "t1", 10)
+            .await
+            .unwrap()
+            .is_empty(),
+        "threads are user-scoped too"
+    );
 
     search.delete_user_indices(user_a).await.unwrap();
     search.delete_user_indices(user_b).await.unwrap();
@@ -379,7 +418,8 @@ async fn structured_filter_constrains_bm25_knn_and_hybrid() {
     let hits = search
         .bm25_search(user_id, "migration runbook", 10, &from_alice)
         .await
-        .unwrap();
+        .unwrap()
+        .hits;
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].message_id, "40");
 
@@ -396,9 +436,10 @@ async fn structured_filter_constrains_bm25_knn_and_hybrid() {
     );
 
     // Hybrid: fused result set is constrained to alice.
-    let results = hybrid_search(&search, &embedder, user_id, body, 5, &from_alice)
+    let results = hybrid_search(&search, &embedder, user_id, body, 5, 0, &from_alice)
         .await
-        .unwrap();
+        .unwrap()
+        .results;
     assert!(!results.is_empty());
     assert!(results.iter().all(|r| r.message_id == "40"));
 
@@ -412,6 +453,7 @@ async fn structured_filter_constrains_bm25_knn_and_hybrid() {
             .bm25_search(user_id, "migration runbook", 10, &from_carol)
             .await
             .unwrap()
+            .hits
             .is_empty()
     );
 
@@ -459,7 +501,8 @@ async fn structured_filter_fields_combine_with_and() {
     let hits = search
         .bm25_search(user_id, "invoice", 10, &both_match)
         .await
-        .unwrap();
+        .unwrap()
+        .hits;
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].message_id, "50");
 
@@ -474,9 +517,390 @@ async fn structured_filter_fields_combine_with_and() {
             .bm25_search(user_id, "invoice", 10, &to_mismatch)
             .await
             .unwrap()
+            .hits
             .is_empty(),
         "AND semantics: a single mismatched field excludes the message"
     );
+
+    search.delete_user_indices(user_id).await.unwrap();
+}
+
+/// Message with a controllable received_at, for date filter/sort tests.
+fn message_at(id: i64, subject: &str, year: i32, month: u32) -> Message {
+    let mut msg = message(id, subject);
+    msg.received_at = Utc.with_ymd_and_hms(year, month, 15, 12, 0, 0).unwrap();
+    msg.thread_id = Some(format!("t{id}"));
+    msg
+}
+
+#[tokio::test]
+async fn date_filter_constrains_bm25_knn_and_listing() {
+    let search = require_opensearch!();
+    let user_id = test_user_id();
+    let embedder = FakeEmbedder::default();
+    search
+        .ensure_user_indices(user_id, embedder.dimension())
+        .await
+        .unwrap();
+
+    let indexer = Indexer {
+        search: &search,
+        embedder: &embedder,
+    };
+    // Identical bodies in different years: only the date range can tell
+    // them apart, proving the filter reaches both index halves.
+    let body = "Annual insurance renewal notice with premium details.";
+    indexer
+        .index_message(
+            user_id,
+            &message_at(60, "renewal", 2018, 3),
+            &email("renewal", body),
+            true,
+        )
+        .await
+        .unwrap();
+    indexer
+        .index_message(
+            user_id,
+            &message_at(61, "renewal", 2021, 3),
+            &email("renewal", body),
+            true,
+        )
+        .await
+        .unwrap();
+    search.refresh_user_indices(user_id).await.unwrap();
+
+    let only_2021 = SearchFilter {
+        received_after: Some("2021-01-01T00:00:00Z".into()),
+        received_before: Some("2021-12-31T23:59:59.999Z".into()),
+        ..Default::default()
+    };
+
+    let page = search
+        .bm25_search(user_id, "insurance renewal", 10, &only_2021)
+        .await
+        .unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.hits[0].message_id, "61");
+
+    let vector = embedder.embed_query(body).await.unwrap();
+    let hits = search
+        .knn_search(user_id, &vector, 10, &only_2021)
+        .await
+        .unwrap();
+    assert!(!hits.is_empty());
+    assert!(
+        hits.iter().all(|h| h.message_id == "61"),
+        "date filter must reach the kNN half (chunk received_at, pipeline v3)"
+    );
+
+    // Query-less listing with the same filter, newest first.
+    let page = search
+        .list_messages(user_id, None, &only_2021, 10, 0, false)
+        .await
+        .unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.hits[0].message_id, "61");
+
+    search.delete_user_indices(user_id).await.unwrap();
+}
+
+#[tokio::test]
+async fn listing_sorts_by_date_and_paginates_with_totals() {
+    let search = require_opensearch!();
+    let user_id = test_user_id();
+    let embedder = FakeEmbedder::default();
+    search
+        .ensure_user_indices(user_id, embedder.dimension())
+        .await
+        .unwrap();
+
+    let indexer = Indexer {
+        search: &search,
+        embedder: &embedder,
+    };
+    for (id, year) in [(70, 2015), (71, 2019), (72, 2023)] {
+        indexer
+            .index_message(
+                user_id,
+                &message_at(id, "status update", year, 6),
+                &email("status update", "Monthly project status update."),
+                true,
+            )
+            .await
+            .unwrap();
+    }
+    search.refresh_user_indices(user_id).await.unwrap();
+
+    // Newest first.
+    let page = search
+        .list_messages(user_id, None, &SearchFilter::default(), 2, 0, false)
+        .await
+        .unwrap();
+    assert_eq!(page.total, 3);
+    let ids: Vec<&str> = page.hits.iter().map(|h| h.message_id.as_str()).collect();
+    assert_eq!(ids, vec!["72", "71"]);
+
+    // Second page via offset.
+    let page = search
+        .list_messages(user_id, None, &SearchFilter::default(), 2, 2, false)
+        .await
+        .unwrap();
+    assert_eq!(page.total, 3);
+    let ids: Vec<&str> = page.hits.iter().map(|h| h.message_id.as_str()).collect();
+    assert_eq!(ids, vec!["70"]);
+
+    // Oldest first flips the order.
+    let page = search
+        .list_messages(user_id, None, &SearchFilter::default(), 3, 0, true)
+        .await
+        .unwrap();
+    let ids: Vec<&str> = page.hits.iter().map(|h| h.message_id.as_str()).collect();
+    assert_eq!(ids, vec!["70", "71", "72"]);
+
+    // With a query, listing still date-sorts and highlights.
+    let page = search
+        .list_messages(
+            user_id,
+            Some("status"),
+            &SearchFilter::default(),
+            3,
+            0,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.hits[0].message_id, "72");
+    assert!(
+        page.hits[0]
+            .highlight
+            .as_deref()
+            .unwrap()
+            .contains("status")
+    );
+
+    search.delete_user_indices(user_id).await.unwrap();
+}
+
+#[tokio::test]
+async fn thread_messages_returns_conversation_oldest_first() {
+    let search = require_opensearch!();
+    let user_id = test_user_id();
+    let embedder = FakeEmbedder::default();
+    search
+        .ensure_user_indices(user_id, embedder.dimension())
+        .await
+        .unwrap();
+
+    let indexer = Indexer {
+        search: &search,
+        embedder: &embedder,
+    };
+    for (id, month, body) in [
+        (80, 2, "First message in the trip thread."),
+        (81, 3, "Reply with hotel options."),
+        (82, 4, "Final itinerary confirmation."),
+    ] {
+        let mut msg = message_at(id, "trip planning", 2020, month);
+        msg.thread_id = Some("trip-thread".into());
+        indexer
+            .index_message(user_id, &msg, &email("trip planning", body), true)
+            .await
+            .unwrap();
+    }
+    // An unrelated thread must not leak in.
+    indexer
+        .index_message(
+            user_id,
+            &message_at(83, "other", 2020, 3),
+            &email("other", "Unrelated conversation."),
+            true,
+        )
+        .await
+        .unwrap();
+    search.refresh_user_indices(user_id).await.unwrap();
+
+    let docs = search
+        .thread_messages(user_id, "trip-thread", 50)
+        .await
+        .unwrap();
+    let ids: Vec<&str> = docs
+        .iter()
+        .map(|d| d.get("message_id").unwrap().as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["80", "81", "82"], "date order, thread-scoped");
+
+    search.delete_user_indices(user_id).await.unwrap();
+}
+
+#[tokio::test]
+async fn facets_scope_to_query_and_filters() {
+    let search = require_opensearch!();
+    let user_id = test_user_id();
+    let embedder = FakeEmbedder::default();
+    search
+        .ensure_user_indices(user_id, embedder.dimension())
+        .await
+        .unwrap();
+
+    let indexer = Indexer {
+        search: &search,
+        embedder: &embedder,
+    };
+    indexer
+        .index_message(
+            user_id,
+            &message_at(90, "invoice march", 2020, 3),
+            &email_addrs(
+                "invoice march",
+                "Invoice attached for March.",
+                "vendor@example.com",
+                "owner@example.com",
+                "",
+            ),
+            true,
+        )
+        .await
+        .unwrap();
+    indexer
+        .index_message(
+            user_id,
+            &message_at(91, "newsletter", 2020, 4),
+            &email_addrs(
+                "newsletter",
+                "Monthly community newsletter.",
+                "news@example.com",
+                "owner@example.com",
+                "",
+            ),
+            true,
+        )
+        .await
+        .unwrap();
+    search.refresh_user_indices(user_id).await.unwrap();
+
+    use arkivo::search::client::FacetKind;
+
+    // Unscoped: both senders appear.
+    let all = search
+        .facets(user_id, FacetKind::From, 20, None, &SearchFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 2);
+
+    // Scoped to a query: only the invoice sender remains.
+    let scoped = search
+        .facets(
+            user_id,
+            FacetKind::From,
+            20,
+            Some("invoice"),
+            &SearchFilter::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(scoped.len(), 1);
+    assert_eq!(scoped[0].value, "vendor@example.com");
+
+    // Month histogram with a date filter.
+    let months = search
+        .facets(
+            user_id,
+            FacetKind::Month,
+            20,
+            None,
+            &SearchFilter {
+                received_after: Some("2020-04-01T00:00:00Z".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(months.len(), 1);
+    assert_eq!(months[0].value, "2020-04");
+
+    search.delete_user_indices(user_id).await.unwrap();
+}
+
+#[tokio::test]
+async fn hybrid_pagination_skips_and_reports_has_more() {
+    let search = require_opensearch!();
+    let user_id = test_user_id();
+    let embedder = FakeEmbedder::default();
+    search
+        .ensure_user_indices(user_id, embedder.dimension())
+        .await
+        .unwrap();
+
+    let indexer = Indexer {
+        search: &search,
+        embedder: &embedder,
+    };
+    for id in 100..105 {
+        indexer
+            .index_message(
+                user_id,
+                &message_at(id, "gardening notes", 2020, 5),
+                &email(
+                    "gardening notes",
+                    &format!("Gardening notes entry number {id} about tomatoes."),
+                ),
+                true,
+            )
+            .await
+            .unwrap();
+    }
+    search.refresh_user_indices(user_id).await.unwrap();
+
+    let first = hybrid_search(
+        &search,
+        &embedder,
+        user_id,
+        "gardening tomatoes",
+        2,
+        0,
+        &SearchFilter::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.results.len(), 2);
+    assert!(first.has_more);
+    assert_eq!(first.total, 5);
+
+    let second = hybrid_search(
+        &search,
+        &embedder,
+        user_id,
+        "gardening tomatoes",
+        2,
+        2,
+        &SearchFilter::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(second.results.len(), 2);
+    let first_ids: Vec<_> = first.results.iter().map(|r| &r.message_id).collect();
+    assert!(
+        second
+            .results
+            .iter()
+            .all(|r| !first_ids.contains(&&r.message_id)),
+        "pages must not overlap"
+    );
+
+    let last = hybrid_search(
+        &search,
+        &embedder,
+        user_id,
+        "gardening tomatoes",
+        2,
+        4,
+        &SearchFilter::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(last.results.len(), 1);
+    assert!(!last.has_more);
 
     search.delete_user_indices(user_id).await.unwrap();
 }

@@ -37,8 +37,29 @@ pub async fn run(config: AppConfig, _args: Args) -> Result<()> {
         config: config.clone(),
     };
 
+    // Reap expired session rows hourly; unauthenticated /auth/*/start
+    // requests write rows too, so the table needs a steady sweep.
+    let session_store = crate::web::store::PgSessionStore::new(pool.clone());
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop {
+            tick.tick().await;
+            match session_store.cleanup_expired().await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(count = n, "reaped expired sessions"),
+                Err(e) => tracing::error!(error = %format!("{e:#}"), "session cleanup failed"),
+            }
+        }
+    });
+
     let listener = tokio::net::TcpListener::bind(&config.web.bind).await?;
     tracing::info!(bind = %config.web.bind, rp_id = %config.web.rp_id, "web service listening");
-    axum::serve(listener, app(state)).await?;
+    // ConnectInfo gives the rate limiter its socket-peer fallback when no
+    // X-Forwarded-For header is present (direct/dev access).
+    axum::serve(
+        listener,
+        app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

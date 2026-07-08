@@ -27,6 +27,10 @@ struct WebHarness {
 
 impl WebHarness {
     async fn start(pool: PgPool) -> Self {
+        Self::start_with(pool, |_| {}).await
+    }
+
+    async fn start_with(pool: PgPool, tweak: impl FnOnce(&mut arkivo::config::AppConfig)) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let origin = Url::parse(&format!("http://localhost:{port}")).unwrap();
@@ -41,7 +45,7 @@ impl WebHarness {
             username: None,
             password: None,
         };
-        let config = arkivo::config::AppConfig {
+        let mut config = arkivo::config::AppConfig {
             database_url: String::new(), // job spawning not exercised here
             maildir_root: std::env::temp_dir().join("arkivo-web-test"),
             master_key_path: std::env::temp_dir().join("arkivo-web-test.key"),
@@ -56,6 +60,7 @@ impl WebHarness {
             mcp: Default::default(),
             defaults: UserDefaults::default(),
         };
+        tweak(&mut config);
         let state = WebState {
             pool,
             webauthn: Arc::new(webauthn),
@@ -66,7 +71,14 @@ impl WebHarness {
             config,
         };
         tokio::spawn(async move {
-            axum::serve(listener, app(state)).await.unwrap();
+            // Same make-service as serve-web: ConnectInfo feeds the
+            // auth-endpoint rate limiter its socket-peer fallback.
+            axum::serve(
+                listener,
+                app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
         });
         Self {
             base: format!("http://localhost:{port}"),
@@ -499,6 +511,125 @@ async fn first_run_setup_creates_admin_then_closes(pool: PgPool) {
         h.register(&client2, &mut softtoken(), &invite, "alice")
             .await,
         200
+    );
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn auth_endpoints_are_rate_limited_per_ip(pool: PgPool) {
+    let h = WebHarness::start(pool).await;
+    let client = h.client();
+
+    // Burn through the burst budget with cheap failing requests; the
+    // limiter must kick in with 429 before the handler runs again.
+    let mut saw_limited = false;
+    for _ in 0..12 {
+        let status = client
+            .post(format!("{}/auth/login/start", h.base))
+            .json(&json!({"handle": "ghost"}))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16();
+        match status {
+            400 => continue,
+            429 => {
+                saw_limited = true;
+                break;
+            }
+            other => panic!("unexpected status {other}"),
+        }
+    }
+    assert!(saw_limited, "12 rapid auth requests must trip the limiter");
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn session_dies_at_absolute_lifetime(pool: PgPool) {
+    let h = WebHarness::start(pool.clone()).await;
+    let client = h.client();
+    let invite = make_invite(&pool, "user").await;
+    h.register(&client, &mut softtoken(), &invite, "alice")
+        .await;
+    assert_eq!(
+        client
+            .get(format!("{}/api/status", h.base))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16(),
+        200
+    );
+
+    // Backdate the login timestamp past the 7-day default: the session
+    // must be rejected even though it is idle-fresh.
+    sqlx::query(
+        "update sessions set data = jsonb_set(data, '{auth_at}',
+             to_jsonb(extract(epoch from now())::bigint - 8 * 86400))",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        client
+            .get(format!("{}/api/status", h.base))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16(),
+        401,
+        "session older than the absolute lifetime must be rejected"
+    );
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn session_cookie_secure_flag_follows_rp_origin(pool: PgPool) {
+    // https origin → Secure cookie (production posture).
+    let h = WebHarness::start_with(pool.clone(), |c| {
+        c.web.rp_origin = "https://arkivo.example.com".into();
+    })
+    .await;
+    let response = h
+        .client()
+        .post(format!("{}/auth/setup/start", h.base))
+        .json(&json!({"handle": "root"}))
+        .send()
+        .await
+        .unwrap();
+    let cookie = response
+        .headers()
+        .get("set-cookie")
+        .expect("session cookie on ceremony start")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(cookie.contains("HttpOnly"));
+    assert!(cookie.contains("SameSite=Strict"));
+    assert!(
+        cookie.contains("Secure"),
+        "https rp_origin must mark the cookie Secure: {cookie}"
+    );
+
+    // Default http localhost origin (dev) → no Secure flag.
+    let h = WebHarness::start(pool).await;
+    let response = h
+        .client()
+        .post(format!("{}/auth/setup/start", h.base))
+        .json(&json!({"handle": "root"}))
+        .send()
+        .await
+        .unwrap();
+    let cookie = response
+        .headers()
+        .get("set-cookie")
+        .expect("session cookie on ceremony start")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        !cookie.contains("Secure"),
+        "http dev origin must keep the cookie usable: {cookie}"
     );
 }
 

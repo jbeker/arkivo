@@ -49,6 +49,7 @@ pub fn chunk_index_body(dimension: usize) -> Value {
                 "from":        {"type": "keyword"},
                 "to":          {"type": "keyword"},
                 "cc":          {"type": "keyword"},
+                "received_at": {"type": "date"},
                 "embedding": {
                     "type": "knn_vector",
                     "dimension": dimension,

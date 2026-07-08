@@ -56,6 +56,14 @@ pub struct WebConfig {
     pub rp_id: String,
     /// Origin the browser reports during ceremonies, e.g. "https://localhost:8443".
     pub rp_origin: String,
+    /// Absolute session lifetime: sessions are rejected this long after
+    /// login regardless of activity (the idle timeout stays separate).
+    #[serde(default = "default_session_max_age_days")]
+    pub session_max_age_days: u32,
+    /// When set, `/metrics` requires `Authorization: Bearer <token>`.
+    /// Unset keeps it open (loopback/proxy-guarded deployments).
+    #[serde(default)]
+    pub metrics_token: Option<String>,
 }
 
 impl Default for WebConfig {
@@ -64,6 +72,8 @@ impl Default for WebConfig {
             bind: "127.0.0.1:8080".into(),
             rp_id: "localhost".into(),
             rp_origin: "http://localhost:8080".into(),
+            session_max_age_days: default_session_max_age_days(),
+            metrics_token: None,
         }
     }
 }
@@ -130,6 +140,10 @@ fn default_num_ctx() -> usize {
 }
 
 fn default_recency_cutoff_days() -> u32 {
+    7
+}
+
+fn default_session_max_age_days() -> u32 {
     7
 }
 
