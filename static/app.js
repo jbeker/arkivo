@@ -174,11 +174,16 @@ async function loadDashboard(isAdmin) {
 
 let refreshTimer = null;
 
-function jobProgress(job) {
+function jobProgress(job, account) {
   const s = job.stats || {};
   if (job.kind === "backfill") {
-    const total = s.total ? ` / ~${s.total}` : "";
-    return `Importing \u2014 ${s.fetched ?? 0}${total} messages (page ${s.pages ?? 0})`;
+    // Numerator is the cumulative archive size (what the account already
+    // holds), not this run's fetched count: a resume starts mid-mailbox,
+    // so s.fetched read as "297 of 524k" even at ~70% done.
+    const done = account?.counts?.total ?? s.fetched ?? 0;
+    const of = s.total ? ` of ~${Number(s.total).toLocaleString()}` : "";
+    const thisRun = s.fetched ? ` (+${Number(s.fetched).toLocaleString()} this run)` : "";
+    return `Importing \u2014 ${Number(done).toLocaleString()}${of} messages${thisRun}`;
   }
   if (job.kind === "promote" || job.kind === "reindex") {
     const verb = job.kind === "reindex" ? "Rebuilding search index" : "Indexing for search";
@@ -260,7 +265,7 @@ function accountPanel(a, running) {
 
   if (running.length) {
     body += running.map((j) =>
-      `<div class="actions"><span>${jobProgress(j)}</span>
+      `<div class="actions"><span>${jobProgress(j, a)}</span>
         <button class="btn btn-sm" onclick="cancelJob(${j.job_id})">Cancel</button></div>`).join("");
   } else {
     body += statusBanner(a, lastByKind, latest);
