@@ -24,7 +24,7 @@ services:
     environment:
       discovery.type: single-node
       DISABLE_SECURITY_PLUGIN: "true" # not exposed outside the compose network
-      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+      OPENSEARCH_JAVA_OPTS: "-Xms4g -Xmx4g"
     volumes:
       - os-data:/usr/share/opensearch/data
     healthcheck:

@@ -17,6 +17,14 @@ pub struct SearchClient {
     password: Option<String>,
 }
 
+/// Server-side collection deadline sent with every `_search` body:
+/// OpenSearch stops collecting and returns what it has (with
+/// `timed_out: true`) instead of running until the client hangs up.
+/// A cold kNN pass over a full-corpus chunk index has been observed
+/// at 80s+, so this and the HTTP timeout below sit well above that.
+const SEARCH_TIMEOUT: &str = "100s";
+const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// One search hit, collapsed to what ranking needs.
 #[derive(Debug, Clone)]
 pub struct Hit {
@@ -111,9 +119,7 @@ pub struct FacetBucket {
 impl SearchClient {
     pub fn new(config: &OpenSearchConfig) -> Result<Self> {
         Ok(Self {
-            http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
-                .build()?,
+            http: reqwest::Client::builder().timeout(HTTP_TIMEOUT).build()?,
             base: config.url.trim_end_matches('/').to_string(),
             username: config.username.clone(),
             password: config.password.clone(),
@@ -148,9 +154,13 @@ impl SearchClient {
     /// indices, so an agent searching it should get nothing back rather
     /// than an index_not_found error.
     async fn search(&self, index: &str, body: &Value) -> Result<Value> {
+        let mut body = body.clone();
+        if body.get("timeout").is_none() {
+            body["timeout"] = json!(SEARCH_TIMEOUT);
+        }
         let response = self
             .request(Method::POST, &format!("/{index}/_search"))
-            .json(body)
+            .json(&body)
             .send()
             .await?;
         let status = response.status();
@@ -162,6 +172,9 @@ impl SearchClient {
             status.is_success(),
             "OpenSearch /{index}/_search returned {status}: {value}"
         );
+        if value.get("timed_out").and_then(Value::as_bool) == Some(true) {
+            tracing::warn!(index, "search hit the {SEARCH_TIMEOUT} deadline; results may be partial");
+        }
         Ok(value)
     }
 

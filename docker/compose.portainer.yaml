@@ -47,8 +47,9 @@ services:
       discovery.type: single-node
       # Not exposed outside the stack network; auth adds nothing here.
       DISABLE_SECURITY_PLUGIN: "true"
-      # Size to your box; 1g is fine to start, raise for a 50GB corpus.
-      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+      # Size to your box; a 35GB+ chunk index needs real heap, and the
+      # Lucene kNN engine wants the rest of RAM free for page cache.
+      OPENSEARCH_JAVA_OPTS: "-Xms4g -Xmx4g"
     volumes:
       - os-data:/usr/share/opensearch/data
     healthcheck:
