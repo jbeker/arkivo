@@ -9,12 +9,11 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::clock::SystemClock;
-use crate::cmd::context::AccountContext;
+use crate::cmd::context::{AccountContext, SourceClient};
 use crate::config::AppConfig;
 use crate::db::{accounts, jobs, locks::AdvisoryLock, messages};
 use crate::embed::OllamaEmbedder;
-use crate::jmap::backfill::{BackfillOptions, backfill_account, fetch_missing_blobs};
-use crate::jmap::sync::poll_account;
+use crate::ingest::BackfillOptions;
 use crate::maildir::Maildir;
 use crate::promote::promote_account;
 use crate::search::SearchClient;
@@ -140,19 +139,52 @@ async fn execute(
                 since: *since,
                 ..Default::default()
             };
-            let stats = backfill_account(
-                pool,
-                &ctx.client,
-                &ctx.maildir,
-                &ctx.account,
-                &options,
-                Some(job_id),
-            )
-            .await?;
-            if stats.cancelled {
-                return Ok(Outcome::Cancelled(serde_json::to_value(&stats)?));
-            }
-            let retried = fetch_missing_blobs(pool, &ctx.client, &ctx.maildir, account_id).await?;
+            let (stats, retried) = match &ctx.client {
+                SourceClient::Jmap(client) => {
+                    let stats = crate::jmap::backfill::backfill_account(
+                        pool,
+                        client,
+                        &ctx.maildir,
+                        &ctx.account,
+                        &options,
+                        Some(job_id),
+                    )
+                    .await?;
+                    if stats.cancelled {
+                        return Ok(Outcome::Cancelled(serde_json::to_value(&stats)?));
+                    }
+                    let retried = crate::jmap::backfill::fetch_missing_blobs(
+                        pool,
+                        client,
+                        &ctx.maildir,
+                        account_id,
+                    )
+                    .await?;
+                    (stats, retried)
+                }
+                SourceClient::Gmail(client) => {
+                    let stats = crate::gmail::backfill::backfill_account(
+                        pool,
+                        client,
+                        &ctx.maildir,
+                        &ctx.account,
+                        &options,
+                        Some(job_id),
+                    )
+                    .await?;
+                    if stats.cancelled {
+                        return Ok(Outcome::Cancelled(serde_json::to_value(&stats)?));
+                    }
+                    let retried = crate::gmail::backfill::fetch_missing_blobs(
+                        pool,
+                        client,
+                        &ctx.maildir,
+                        &ctx.account,
+                    )
+                    .await?;
+                    (stats, retried)
+                }
+            };
             let mut value = serde_json::to_value(&stats)?;
             value["retried_blobs"] = json!(retried);
             Ok(Outcome::Succeeded(value))
@@ -160,15 +192,30 @@ async fn execute(
         JobKind::Poll => {
             let ctx = AccountContext::open(config, pool, account_id).await?;
             let search = SearchClient::new(&config.opensearch)?;
-            let stats = poll_account(
-                pool,
-                &ctx.client,
-                &ctx.maildir,
-                Some(&search),
-                &ctx.account,
-                ctx.deletion_policy(),
-            )
-            .await?;
+            let stats = match &ctx.client {
+                SourceClient::Jmap(client) => {
+                    crate::jmap::sync::poll_account(
+                        pool,
+                        client,
+                        &ctx.maildir,
+                        Some(&search),
+                        &ctx.account,
+                        ctx.deletion_policy(),
+                    )
+                    .await?
+                }
+                SourceClient::Gmail(client) => {
+                    crate::gmail::sync::poll_account(
+                        pool,
+                        client,
+                        &ctx.maildir,
+                        Some(&search),
+                        &ctx.account,
+                        ctx.deletion_policy(),
+                    )
+                    .await?
+                }
+            };
             Ok(Outcome::Succeeded(serde_json::to_value(&stats)?))
         }
         JobKind::Promote | JobKind::Reindex { .. } => {

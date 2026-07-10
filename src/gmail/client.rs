@@ -199,18 +199,22 @@ impl GmailClient {
         max_results: u32,
         include_spam_trash: bool,
     ) -> Result<MessageListPage, GmailError> {
-        let mut qs = url::form_urlencoded::Serializer::new(String::new());
-        qs.append_pair("maxResults", &max_results.to_string());
-        if include_spam_trash {
-            qs.append_pair("includeSpamTrash", "true");
-        }
-        if let Some(q) = q {
-            qs.append_pair("q", q);
-        }
-        if let Some(token) = page_token {
-            qs.append_pair("pageToken", token);
-        }
-        let v = self.api_get(&format!("/messages?{}", qs.finish())).await?;
+        // Scoped: the Serializer is !Send and must drop before the await.
+        let query = {
+            let mut qs = url::form_urlencoded::Serializer::new(String::new());
+            qs.append_pair("maxResults", &max_results.to_string());
+            if include_spam_trash {
+                qs.append_pair("includeSpamTrash", "true");
+            }
+            if let Some(q) = q {
+                qs.append_pair("q", q);
+            }
+            if let Some(token) = page_token {
+                qs.append_pair("pageToken", token);
+            }
+            qs.finish()
+        };
+        let v = self.api_get(&format!("/messages?{query}")).await?;
         serde_json::from_value(v).map_err(|e| GmailError::Protocol(e.to_string()))
     }
 
@@ -236,13 +240,17 @@ impl GmailClient {
         start_history_id: &str,
         page_token: Option<&str>,
     ) -> Result<HistoryPage, GmailError> {
-        let mut qs = url::form_urlencoded::Serializer::new(String::new());
-        qs.append_pair("startHistoryId", start_history_id);
-        qs.append_pair("maxResults", "500");
-        if let Some(token) = page_token {
-            qs.append_pair("pageToken", token);
-        }
-        let result = self.api_get(&format!("/history?{}", qs.finish())).await;
+        // Scoped: the Serializer is !Send and must drop before the await.
+        let query = {
+            let mut qs = url::form_urlencoded::Serializer::new(String::new());
+            qs.append_pair("startHistoryId", start_history_id);
+            qs.append_pair("maxResults", "500");
+            if let Some(token) = page_token {
+                qs.append_pair("pageToken", token);
+            }
+            qs.finish()
+        };
+        let result = self.api_get(&format!("/history?{query}")).await;
         match result {
             Err(GmailError::Status(404, _)) => Err(GmailError::HistoryExpired),
             other => other
