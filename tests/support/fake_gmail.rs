@@ -56,6 +56,9 @@ struct Inner {
     token_seq: u64,
     expires_in: u64,
     grant_revoked: bool,
+    /// Authorization codes the token endpoint will exchange (single-use).
+    pending_codes: Vec<String>,
+    omit_refresh_token: bool,
 }
 
 #[derive(Clone)]
@@ -80,6 +83,8 @@ impl FakeGmail {
             token_seq: 0,
             expires_in: 3600,
             grant_revoked: false,
+            pending_codes: Vec::new(),
+            omit_refresh_token: false,
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -114,6 +119,11 @@ impl FakeGmail {
         arkivo::config::GoogleConfig {
             client_id: CLIENT_ID.into(),
             client_secret: CLIENT_SECRET.into(),
+            // The consent page is never fetched by the app (the browser
+            // is redirected there), so any URL will do for tests.
+            auth_url: Some(format!("http://{}/o/oauth2/auth", self.addr)),
+            token_url: Some(self.token_url()),
+            api_base: Some(self.api_base()),
         }
     }
 
@@ -166,6 +176,22 @@ impl FakeGmail {
     /// Reject any pageToken with 400 (simulates expiry between runs).
     pub fn reject_page_tokens(&self, reject: bool) {
         self.inner.lock().unwrap().reject_page_tokens = reject;
+    }
+
+    /// Register an authorization code the token endpoint will accept
+    /// (single-use), as if a user had just completed consent.
+    pub fn expect_auth_code(&self, code: &str) {
+        self.inner
+            .lock()
+            .unwrap()
+            .pending_codes
+            .push(code.to_string());
+    }
+
+    /// Make code exchanges omit the refresh_token (Google does this on
+    /// re-consent without prompt=consent).
+    pub fn omit_refresh_token(&self, omit: bool) {
+        self.inner.lock().unwrap().omit_refresh_token = omit;
     }
 
     pub fn add_message(
@@ -272,32 +298,68 @@ async fn token_handler(State(fake): State<FakeGmail>, RawForm(body): RawForm) ->
     let params: HashMap<String, String> = url::form_urlencoded::parse(&body)
         .into_owned()
         .collect();
-    let mut inner = fake.inner.lock().unwrap();
-    if inner.grant_revoked
-        || params.get("grant_type").map(String::as_str) != Some("refresh_token")
-        || params.get("refresh_token").map(String::as_str) != Some(REFRESH_TOKEN)
-        || params.get("client_id").map(String::as_str) != Some(CLIENT_ID)
-        || params.get("client_secret").map(String::as_str) != Some(CLIENT_SECRET)
-    {
-        return (
+    let invalid_grant = || {
+        (
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "invalid_grant"})),
         )
-            .into_response();
+            .into_response()
+    };
+    let mut inner = fake.inner.lock().unwrap();
+    if params.get("client_id").map(String::as_str) != Some(CLIENT_ID)
+        || params.get("client_secret").map(String::as_str) != Some(CLIENT_SECRET)
+    {
+        return invalid_grant();
     }
-    inner.token_seq += 1;
-    let token = format!("at-{}", inner.token_seq);
-    inner.valid_tokens.push(token.clone());
-    let expires_in = inner.expires_in;
-    drop(inner);
-    fake.token_refreshes.fetch_add(1, Ordering::SeqCst);
-    Json(json!({
-        "access_token": token,
-        "expires_in": expires_in,
-        "token_type": "Bearer",
-        "scope": "https://www.googleapis.com/auth/gmail.readonly",
-    }))
-    .into_response()
+    match params.get("grant_type").map(String::as_str) {
+        Some("refresh_token") => {
+            if inner.grant_revoked
+                || params.get("refresh_token").map(String::as_str) != Some(REFRESH_TOKEN)
+            {
+                return invalid_grant();
+            }
+            inner.token_seq += 1;
+            let token = format!("at-{}", inner.token_seq);
+            inner.valid_tokens.push(token.clone());
+            let expires_in = inner.expires_in;
+            drop(inner);
+            fake.token_refreshes.fetch_add(1, Ordering::SeqCst);
+            Json(json!({
+                "access_token": token,
+                "expires_in": expires_in,
+                "token_type": "Bearer",
+                "scope": "https://www.googleapis.com/auth/gmail.readonly",
+            }))
+            .into_response()
+        }
+        Some("authorization_code") => {
+            let code = params.get("code").map(String::as_str).unwrap_or("");
+            let position = inner.pending_codes.iter().position(|c| c == code);
+            let Some(position) = position else {
+                return invalid_grant();
+            };
+            if params.get("code_verifier").map(String::is_empty) != Some(false)
+                || params.get("redirect_uri").map(String::is_empty) != Some(false)
+            {
+                return invalid_grant();
+            }
+            inner.pending_codes.remove(position); // single-use
+            inner.token_seq += 1;
+            let token = format!("at-{}", inner.token_seq);
+            inner.valid_tokens.push(token.clone());
+            let mut body = json!({
+                "access_token": token,
+                "expires_in": inner.expires_in,
+                "token_type": "Bearer",
+                "scope": "https://www.googleapis.com/auth/gmail.readonly",
+            });
+            if !inner.omit_refresh_token {
+                body["refresh_token"] = json!(REFRESH_TOKEN);
+            }
+            Json(body).into_response()
+        }
+        _ => invalid_grant(),
+    }
 }
 
 async fn profile_handler(State(fake): State<FakeGmail>, headers: HeaderMap) -> Response {

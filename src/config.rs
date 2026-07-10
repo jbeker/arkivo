@@ -35,12 +35,25 @@ pub struct GoogleConfig {
     pub client_id: String,
     /// Prefer supplying via ARKIVO_GOOGLE__CLIENT_SECRET.
     pub client_secret: String,
+    /// Endpoint overrides for tests; unset means real Google.
+    #[serde(default)]
+    pub auth_url: Option<String>,
+    #[serde(default)]
+    pub token_url: Option<String>,
+    #[serde(default)]
+    pub api_base: Option<String>,
 }
 
 impl GoogleConfig {
     /// The registered OAuth redirect URI, derived from the web origin.
     pub fn redirect_uri(rp_origin: &str) -> String {
         format!("{}/oauth/google/callback", rp_origin.trim_end_matches('/'))
+    }
+
+    pub fn auth_url(&self) -> &str {
+        self.auth_url
+            .as_deref()
+            .unwrap_or("https://accounts.google.com/o/oauth2/v2/auth")
     }
 }
 

@@ -122,6 +122,7 @@ pub fn app(state: WebState) -> Router {
 
     let authed = Router::new()
         .merge(routes::user::router())
+        .merge(routes::oauth::authed_router())
         .merge(passkeys::authed_router())
         .merge(pages::authed_router())
         .layer(axum::middleware::from_fn_with_state(
@@ -193,6 +194,7 @@ pub fn app(state: WebState) -> Router {
             )),
         )
         .merge(pages::public_router())
+        .merge(routes::oauth::public_router())
         .merge(authed)
         .merge(admin)
         .layer(session_layer)

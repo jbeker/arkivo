@@ -8,6 +8,7 @@ pub mod auth;
 pub mod jobs;
 pub mod locks;
 pub mod messages;
+pub mod oauth_states;
 pub mod tokens;
 pub mod users;
 

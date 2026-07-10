@@ -61,7 +61,13 @@ impl GmailClient {
         refresh_token: String,
         retry: RetryPolicy,
     ) -> Result<Self, GmailError> {
-        Self::with_endpoints(google, refresh_token, retry, TOKEN_URL, API_BASE)
+        Self::with_endpoints(
+            google,
+            refresh_token,
+            retry,
+            google.token_url.as_deref().unwrap_or(TOKEN_URL),
+            google.api_base.as_deref().unwrap_or(API_BASE),
+        )
     }
 
     /// Endpoint-injectable constructor for tests against a fake server.

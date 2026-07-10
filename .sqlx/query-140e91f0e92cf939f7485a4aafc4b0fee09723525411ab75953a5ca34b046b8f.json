@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update oauth_states set consumed_at = now()\n           where state_hash = $1 and consumed_at is null and expires_at > now()\n           returning user_id, pkce_verifier",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "oauth_states",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "pkce_verifier",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "oauth_states",
+            "name": "pkce_verifier"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bytea"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "140e91f0e92cf939f7485a4aafc4b0fee09723525411ab75953a5ca34b046b8f"
+}

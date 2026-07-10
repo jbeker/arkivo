@@ -671,3 +671,211 @@ async fn add_account_validates_token_before_sealing(pool: PgPool) {
         Some(support::fake_jmap::ACCOUNT_ID)
     );
 }
+
+// ---- Google OAuth flow ----
+
+fn no_redirect_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .cookie_store(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+}
+
+/// Register a session and return (harness, client-with-cookies, fake).
+async fn gmail_harness(
+    pool: &PgPool,
+    handle: &str,
+) -> (WebHarness, reqwest::Client, support::fake_gmail::FakeGmail) {
+    let fake = support::fake_gmail::FakeGmail::start().await;
+    let google = fake.google_config();
+    let h = WebHarness::start_with(pool.clone(), move |cfg| cfg.google = Some(google)).await;
+    let client = no_redirect_client();
+    let mut authenticator = softtoken();
+    let invite = make_invite(pool, "user").await;
+    assert_eq!(h.register(&client, &mut authenticator, &invite, handle).await, 200);
+    (h, client, fake)
+}
+
+fn location(response: &reqwest::Response) -> String {
+    response
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn oauth_start_requires_config_and_session(pool: PgPool) {
+    // No [google] config: 404 even with a session.
+    let h = WebHarness::start(pool.clone()).await;
+    let client = no_redirect_client();
+    let mut authenticator = softtoken();
+    let invite = make_invite(&pool, "user").await;
+    assert_eq!(h.register(&client, &mut authenticator, &invite, "gina").await, 200);
+    let response = client
+        .get(format!("{}/oauth/google/start", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 404);
+
+    // With config but no session: redirected to login, no state minted.
+    let (h, _client, _fake) = gmail_harness(&pool, "gwen").await;
+    let anonymous = no_redirect_client();
+    let response = anonymous
+        .get(format!("{}/oauth/google/start", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(location(&response), "/login");
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn oauth_flow_connects_gmail_account_end_to_end(pool: PgPool) {
+    let (h, client, fake) = gmail_harness(&pool, "gina").await;
+
+    // Start: 3xx to Google's consent page with state + PKCE challenge.
+    let response = client
+        .get(format!("{}/oauth/google/start", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_redirection());
+    let consent = Url::parse(&location(&response)).unwrap();
+    let params: std::collections::HashMap<_, _> = consent.query_pairs().into_owned().collect();
+    let state_param = params.get("state").expect("state param").clone();
+    assert_eq!(params.get("access_type").map(String::as_str), Some("offline"));
+    assert_eq!(params.get("prompt").map(String::as_str), Some("consent"));
+    assert_eq!(params.get("code_challenge_method").map(String::as_str), Some("S256"));
+    assert!(params.get("redirect_uri").unwrap().ends_with("/oauth/google/callback"));
+
+    // Callback: cookie-less (the cross-site redirect carries no session);
+    // the single-use state row authenticates it.
+    fake.expect_auth_code("test-code");
+    let anonymous = no_redirect_client();
+    let response = anonymous
+        .get(format!(
+            "{}/oauth/google/callback?code=test-code&state={state_param}",
+            h.base
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(location(&response), "/?gmail=connected");
+
+    // Account row: gmail provider, granted address, sealed refresh token.
+    let user = users::get_by_handle(&pool, "gina").await.unwrap().unwrap();
+    let accounts = arkivo::db::accounts::list_for_user(&pool, user.id).await.unwrap();
+    assert_eq!(accounts.len(), 1);
+    let account = &accounts[0];
+    assert_eq!(account.provider, "gmail");
+    assert_eq!(account.account_id.as_deref(), Some(support::fake_gmail::EMAIL));
+    assert!(account.jmap_session_url.is_none());
+    let sealer = Sealer::new(&[7u8; 32], "primary").unwrap();
+    assert_eq!(
+        sealer.unseal(&account.sealed_token).unwrap(),
+        support::fake_gmail::REFRESH_TOKEN.as_bytes()
+    );
+    assert!(
+        arkivo::db::accounts::get_gmail_state(&pool, account.id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    // Replaying the callback fails: the state row is single-use.
+    let response = anonymous
+        .get(format!(
+            "{}/oauth/google/callback?code=test-code&state={state_param}",
+            h.base
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 400);
+
+    // Connecting the same mailbox again is rejected as a duplicate.
+    let response = client
+        .get(format!("{}/oauth/google/start", h.base))
+        .send()
+        .await
+        .unwrap();
+    let consent = Url::parse(&location(&response)).unwrap();
+    let state2 = consent
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .map(|(_, v)| v.into_owned())
+        .unwrap();
+    fake.expect_auth_code("test-code-2");
+    let response = anonymous
+        .get(format!(
+            "{}/oauth/google/callback?code=test-code-2&state={state2}",
+            h.base
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(location(&response), "/?gmail=exists");
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn oauth_callback_rejects_denial_bad_state_and_missing_refresh_token(pool: PgPool) {
+    let (h, client, fake) = gmail_harness(&pool, "gina").await;
+    let anonymous = no_redirect_client();
+
+    // User declined at the consent screen.
+    let response = anonymous
+        .get(format!(
+            "{}/oauth/google/callback?error=access_denied&state=whatever",
+            h.base
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(location(&response), "/?gmail=denied");
+
+    // Forged/unknown state.
+    let response = anonymous
+        .get(format!(
+            "{}/oauth/google/callback?code=x&state=gs_{}",
+            h.base,
+            "0".repeat(64)
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 400);
+
+    // Exchange that yields no refresh_token must not create an account.
+    let response = client
+        .get(format!("{}/oauth/google/start", h.base))
+        .send()
+        .await
+        .unwrap();
+    let consent = Url::parse(&location(&response)).unwrap();
+    let state_param = consent
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .map(|(_, v)| v.into_owned())
+        .unwrap();
+    fake.expect_auth_code("code-3");
+    fake.omit_refresh_token(true);
+    let response = anonymous
+        .get(format!(
+            "{}/oauth/google/callback?code=code-3&state={state_param}",
+            h.base
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(location(&response), "/?gmail=error");
+    let user = users::get_by_handle(&pool, "gina").await.unwrap().unwrap();
+    assert!(
+        arkivo::db::accounts::list_for_user(&pool, user.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
