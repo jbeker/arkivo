@@ -23,6 +23,25 @@ pub struct AppConfig {
     pub mcp: McpConfig,
     #[serde(default)]
     pub defaults: UserDefaults,
+    /// Google OAuth client for Gmail ingestion. Absent disables the
+    /// "Connect Gmail" flow; existing gmail accounts fail jobs with a
+    /// clear error until it is restored.
+    #[serde(default)]
+    pub google: Option<GoogleConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GoogleConfig {
+    pub client_id: String,
+    /// Prefer supplying via ARKIVO_GOOGLE__CLIENT_SECRET.
+    pub client_secret: String,
+}
+
+impl GoogleConfig {
+    /// The registered OAuth redirect URI, derived from the web origin.
+    pub fn redirect_uri(rp_origin: &str) -> String {
+        format!("{}/oauth/google/callback", rp_origin.trim_end_matches('/'))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

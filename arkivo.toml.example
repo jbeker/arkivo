@@ -30,3 +30,11 @@ bind = "127.0.0.1:8081"
 [defaults]
 recency_cutoff_days = 7
 deletion_policy = "retain"  # or "mirror"
+
+# Optional: enables the "Connect Gmail" flow. Create an Internal OAuth
+# client (web application) in the Workspace's Google Cloud project with
+# redirect URI {rp_origin}/oauth/google/callback and the
+# gmail.readonly scope.
+# [google]
+# client_id = "1234567890-abc.apps.googleusercontent.com"
+# client_secret = "..."  # prefer ARKIVO_GOOGLE__CLIENT_SECRET
