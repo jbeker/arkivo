@@ -357,11 +357,12 @@ async fn list_handler(
         }
     }
 
+    let include_spam_trash = params.get("includeSpamTrash").map(String::as_str) == Some("true");
     let mut messages: Vec<&FakeGmailMessage> = inner
         .messages
         .values()
         .filter(|m| {
-            !m.label_ids.iter().any(|l| l == "SPAM" || l == "TRASH")
+            (include_spam_trash || !m.label_ids.iter().any(|l| l == "SPAM" || l == "TRASH"))
                 && after.is_none_or(|a| m.internal_date >= a * 1000)
                 && before.is_none_or(|b| m.internal_date < b * 1000)
         })

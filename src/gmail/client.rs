@@ -187,17 +187,23 @@ impl GmailClient {
         serde_json::from_value(v).map_err(|e| GmailError::Protocol(e.to_string()))
     }
 
-    /// One page of message ids, newest first. SPAM and TRASH are excluded
-    /// by the API default (includeSpamTrash is never sent). `q` takes
+    /// One page of message ids, newest first. With `include_spam_trash`
+    /// false (the API default) SPAM and TRASH never appear — the ingest
+    /// policy for backfill. The resync diff passes true so a message
+    /// merely moved to trash is not mistaken for a deleted one. `q` takes
     /// Gmail search syntax; `after:`/`before:` accept epoch seconds.
     pub async fn list_messages(
         &self,
         q: Option<&str>,
         page_token: Option<&str>,
         max_results: u32,
+        include_spam_trash: bool,
     ) -> Result<MessageListPage, GmailError> {
         let mut qs = url::form_urlencoded::Serializer::new(String::new());
         qs.append_pair("maxResults", &max_results.to_string());
+        if include_spam_trash {
+            qs.append_pair("includeSpamTrash", "true");
+        }
         if let Some(q) = q {
             qs.append_pair("q", q);
         }

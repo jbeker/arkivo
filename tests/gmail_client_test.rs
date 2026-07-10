@@ -85,7 +85,7 @@ async fn rate_limit_429_is_retried() {
     let client = client(&fake);
 
     fake.fail_next(2);
-    let page = client.list_messages(None, None, 100).await.unwrap();
+    let page = client.list_messages(None, None, 100, false).await.unwrap();
     assert_eq!(page.messages.len(), 1);
 }
 
@@ -136,11 +136,11 @@ async fn list_excludes_spam_and_trash_and_pages_newest_first() {
     fake.add_message("newest", "a@example.com", ts(5), &["INBOX"]);
     let client = client(&fake);
 
-    let first = client.list_messages(None, None, 2).await.unwrap();
+    let first = client.list_messages(None, None, 2, false).await.unwrap();
     assert_eq!(first.messages.len(), 2);
     let token = first.next_page_token.clone().expect("more pages");
     let second = client
-        .list_messages(None, Some(&token), 2)
+        .list_messages(None, Some(&token), 2, false)
         .await
         .unwrap();
     assert_eq!(second.messages.len(), 1, "spam/trash never listed");
