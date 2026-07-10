@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "update jobs set cancel_requested_at = now() where id = $1",
+  "query": "insert into gmail_state (mail_account_id) values ($1)",
   "describe": {
     "columns": [],
     "parameters": {
@@ -10,5 +10,5 @@
     },
     "nullable": []
   },
-  "hash": "8ce2e36fd67da49b5bf14db298efac04b3dc969fecc5433e5ace9778971f8dd4"
+  "hash": "9c2a96acd076d717b21bc6f08cc83dc6d3f10717d71907bf03c1228809325996"
 }

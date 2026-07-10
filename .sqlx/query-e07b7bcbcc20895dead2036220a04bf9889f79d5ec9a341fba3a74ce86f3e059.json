@@ -1,0 +1,163 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into mail_accounts (user_id, jmap_session_url, sealed_token, seal_key_id)\n           values ($1, $2, $3, $4)\n           returning id, user_id, provider, jmap_session_url, account_id, sealed_token,\n                     seal_key_id, recency_cutoff_days, deletion_policy,\n                     poll_interval_secs, sanitize_policy, created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "provider",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "provider"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "jmap_session_url",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "jmap_session_url"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "account_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "account_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "sealed_token",
+        "type_info": "Bytea",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "sealed_token"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "seal_key_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "seal_key_id"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "recency_cutoff_days",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "recency_cutoff_days"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "deletion_policy",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "deletion_policy"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "poll_interval_secs",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "poll_interval_secs"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "sanitize_policy",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "sanitize_policy"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Bytea",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "e07b7bcbcc20895dead2036220a04bf9889f79d5ec9a341fba3a74ce86f3e059"
+}

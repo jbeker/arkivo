@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update gmail_state set history_id = $2, updated_at = now()\n           where mail_account_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0408c53c94eb3478b11e764f46d2a7c1a61416dd826ac92cfb667c3dee7566a7"
+}

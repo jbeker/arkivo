@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update gmail_state\n           set backfill_done = true, backfill_cursor = null, updated_at = now()\n           where mail_account_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "27bdc982e2001f62741689c8cb3c404412328f22a37f12118f9d9722ade4a3e9"
+}

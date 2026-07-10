@@ -38,8 +38,11 @@ impl AccountContext {
         let token = String::from_utf8(sealer.unseal(&account.sealed_token)?)
             .context("unsealed token is not valid UTF-8")?;
 
-        let client =
-            JmapClient::connect(&account.jmap_session_url, &token, RetryPolicy::default()).await?;
+        let session_url = account
+            .jmap_session_url
+            .as_deref()
+            .with_context(|| format!("jmap account {} has no session url", account.id))?;
+        let client = JmapClient::connect(session_url, &token, RetryPolicy::default()).await?;
 
         let maildir = Maildir::open_or_create(
             config
