@@ -6,7 +6,6 @@
 //! incremental poll picks up whatever changed during the sweep.
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use futures::stream::{self, StreamExt};
 use sqlx::PgPool;
 
@@ -19,36 +18,7 @@ use crate::maildir::MessageStore;
 /// hard rate limits, so we stay polite (plan: 4-8).
 pub const DOWNLOAD_CONCURRENCY: usize = 6;
 
-#[derive(Debug, Default, serde::Serialize)]
-pub struct BackfillStats {
-    pub fetched: u64,
-    pub pages: u64,
-    pub complete: bool,
-    /// Server-reported mailbox total, from the first Email/query page.
-    pub total: Option<u64>,
-    /// Stopped early because cancellation was requested.
-    pub cancelled: bool,
-    /// Messages whose metadata landed but whose blob download failed this
-    /// sweep. Their rows carry `maildir_path IS NULL`; `fetch_missing_blobs`
-    /// retries them after the sweep completes.
-    pub failed: u64,
-}
-
-pub struct BackfillOptions {
-    pub limit: Option<u64>,
-    pub since: Option<DateTime<Utc>>,
-    pub page_size: u64,
-}
-
-impl Default for BackfillOptions {
-    fn default() -> Self {
-        Self {
-            limit: None,
-            since: None,
-            page_size: 100,
-        }
-    }
-}
+pub use crate::ingest::{BackfillOptions, BackfillStats};
 
 /// `job`: when present, per-page progress is written to that jobs row
 /// and its cancel flag is honored at page boundaries (the anchor cursor

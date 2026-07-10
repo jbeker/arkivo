@@ -59,6 +59,7 @@ impl WebHarness {
             web: Default::default(),
             mcp: Default::default(),
             defaults: UserDefaults::default(),
+            google: None,
         };
         tweak(&mut config);
         let state = WebState {

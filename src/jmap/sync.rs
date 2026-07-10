@@ -10,19 +10,14 @@ use anyhow::{Context, Result};
 use sqlx::PgPool;
 
 use crate::config::DeletionPolicy;
-use crate::db::{accounts, audit, messages};
+use crate::db::{accounts, messages};
+use crate::ingest::apply_destroyed;
 use crate::jmap::types::Email;
 use crate::jmap::{JmapClient, JmapError};
 use crate::maildir::MessageStore;
 use crate::search::SearchClient;
 
-#[derive(Debug, Default, serde::Serialize)]
-pub struct SyncStats {
-    pub fetched: u64,
-    pub updated: u64,
-    pub destroyed: u64,
-    pub resynced: bool,
-}
+pub use crate::ingest::SyncStats;
 
 fn to_meta(email: &Email) -> messages::MessageMeta {
     messages::MessageMeta {
@@ -65,66 +60,6 @@ pub async fn ingest_email(
     let mut conn = pool.acquire().await?;
     messages::set_stored(&mut conn, row_id, &rel_path).await?;
     Ok(true)
-}
-
-/// Apply one destroyed ID per the account's deletion policy (spec §7.6).
-/// `search` is optional so credential-free test paths can skip index
-/// cleanup; production polling always passes it.
-async fn apply_destroyed(
-    pool: &PgPool,
-    store: &dyn MessageStore,
-    search: Option<&SearchClient>,
-    mail_account_id: i64,
-    user_id: i64,
-    jmap_email_id: &str,
-    policy: DeletionPolicy,
-) -> Result<()> {
-    let Some(msg) = messages::get_by_jmap_id(pool, mail_account_id, jmap_email_id).await? else {
-        return Ok(()); // never knew this message
-    };
-    match policy {
-        DeletionPolicy::Retain => {
-            audit::record(
-                pool,
-                Some(user_id),
-                "system:poll",
-                "message_destroyed_upstream_retained",
-                Some(&msg.id.to_string()),
-                None,
-            )
-            .await?;
-        }
-        DeletionPolicy::Mirror => {
-            if let Some(path) = &msg.maildir_path {
-                match store.remove(path) {
-                    Ok(()) => {}
-                    // Already gone is fine; anything else is not.
-                    Err(e) if !pool_file_missing(&e) => return Err(e),
-                    Err(_) => {}
-                }
-            }
-            if let Some(search) = search {
-                search.delete_message_docs(user_id, msg.id).await?;
-            }
-            messages::delete_row(pool, msg.id).await?;
-            audit::record(
-                pool,
-                Some(user_id),
-                "system:poll",
-                "message_destroyed_upstream_mirrored",
-                Some(&msg.id.to_string()),
-                None,
-            )
-            .await?;
-        }
-    }
-    Ok(())
-}
-
-fn pool_file_missing(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<std::io::Error>()
-        .map(|io| io.kind() == std::io::ErrorKind::NotFound)
-        .unwrap_or(false)
 }
 
 /// One poll run: walk Email/changes pages until exhausted, ingesting as
