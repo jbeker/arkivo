@@ -319,7 +319,16 @@ pub async fn resync_account(
     }
 
     for gone in local_ids.difference(&server_ids) {
-        apply_destroyed(pool, store, search, account.id, account.user_id, gone, policy).await?;
+        apply_destroyed(
+            pool,
+            store,
+            search,
+            account.id,
+            account.user_id,
+            gone,
+            policy,
+        )
+        .await?;
         stats.destroyed += 1;
     }
 

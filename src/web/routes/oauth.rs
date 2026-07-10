@@ -97,10 +97,7 @@ struct ExchangeResponse {
     refresh_token: Option<String>,
 }
 
-async fn callback(
-    State(state): State<WebState>,
-    Query(params): Query<CallbackParams>,
-) -> Response {
+async fn callback(State(state): State<WebState>, Query(params): Query<CallbackParams>) -> Response {
     let Some(google) = state.config.google.clone() else {
         return (StatusCode::NOT_FOUND, "Gmail is not configured").into_response();
     };
@@ -129,31 +126,39 @@ async fn callback(
         }
     };
 
-    let refresh_token =
-        match exchange_code(&google, &state.config.web.rp_origin, code, &consumed.pkce_verifier)
-            .await
-        {
-            Ok(ExchangeResponse {
-                refresh_token: Some(token),
-                ..
-            }) => token,
-            Ok(_) => {
-                tracing::warn!("google token exchange returned no refresh_token");
-                return Redirect::to("/?gmail=error").into_response();
-            }
-            Err(e) => {
-                tracing::warn!(error = %format!("{e:#}"), "google code exchange failed");
-                return Redirect::to("/?gmail=error").into_response();
-            }
-        };
+    let refresh_token = match exchange_code(
+        &google,
+        &state.config.web.rp_origin,
+        code,
+        &consumed.pkce_verifier,
+    )
+    .await
+    {
+        Ok(ExchangeResponse {
+            refresh_token: Some(token),
+            ..
+        }) => token,
+        Ok(_) => {
+            tracing::warn!("google token exchange returned no refresh_token");
+            return Redirect::to("/?gmail=error").into_response();
+        }
+        Err(e) => {
+            tracing::warn!(error = %format!("{e:#}"), "google code exchange failed");
+            return Redirect::to("/?gmail=error").into_response();
+        }
+    };
 
     // Validate the grant end-to-end (mirrors add_account's live check)
     // and learn the granted address.
     let profile = {
-        let client = match GmailClient::new(&google, refresh_token.clone(), RetryPolicy {
-            max_retries: 1,
-            base_delay: std::time::Duration::from_millis(500),
-        }) {
+        let client = match GmailClient::new(
+            &google,
+            refresh_token.clone(),
+            RetryPolicy {
+                max_retries: 1,
+                base_delay: std::time::Duration::from_millis(500),
+            },
+        ) {
             Ok(client) => client,
             Err(e) => {
                 tracing::warn!(error = %e, "gmail client build failed");

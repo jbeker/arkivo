@@ -188,9 +188,20 @@ impl AppConfig {
         } else {
             figment = figment.merge(Toml::file("arkivo.toml"));
         }
-        Ok(figment
+        let mut config: Self = figment
             .merge(Env::prefixed("ARKIVO_").split("__"))
-            .extract()?)
+            .extract()?;
+        // Compose files pass ARKIVO_GOOGLE__* through unconditionally, so
+        // an unset deployment arrives as empty strings; treat that as
+        // "not configured" rather than a broken OAuth client.
+        if config
+            .google
+            .as_ref()
+            .is_some_and(|g| g.client_id.is_empty() || g.client_secret.is_empty())
+        {
+            config.google = None;
+        }
+        Ok(config)
     }
 }
 
@@ -236,6 +247,26 @@ mod tests {
             let cfg = AppConfig::load(None).expect("config should load");
             assert_eq!(cfg.opensearch.url, "http://search:9200");
             assert_eq!(cfg.defaults.recency_cutoff_days, 14);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn empty_google_env_means_not_configured() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file("arkivo.toml", base_toml())?;
+            jail.set_env("ARKIVO_GOOGLE__CLIENT_ID", "");
+            jail.set_env("ARKIVO_GOOGLE__CLIENT_SECRET", "");
+            let cfg = AppConfig::load(None).expect("config should load");
+            assert!(cfg.google.is_none());
+
+            jail.set_env("ARKIVO_GOOGLE__CLIENT_ID", "id.apps.googleusercontent.com");
+            jail.set_env("ARKIVO_GOOGLE__CLIENT_SECRET", "secret");
+            let cfg = AppConfig::load(None).expect("config should load");
+            assert_eq!(
+                cfg.google.as_ref().map(|g| g.client_id.as_str()),
+                Some("id.apps.googleusercontent.com")
+            );
             Ok(())
         });
     }

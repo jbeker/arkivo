@@ -693,7 +693,11 @@ async fn gmail_harness(
     let client = no_redirect_client();
     let mut authenticator = softtoken();
     let invite = make_invite(pool, "user").await;
-    assert_eq!(h.register(&client, &mut authenticator, &invite, handle).await, 200);
+    assert_eq!(
+        h.register(&client, &mut authenticator, &invite, handle)
+            .await,
+        200
+    );
     (h, client, fake)
 }
 
@@ -713,7 +717,11 @@ async fn oauth_start_requires_config_and_session(pool: PgPool) {
     let client = no_redirect_client();
     let mut authenticator = softtoken();
     let invite = make_invite(&pool, "user").await;
-    assert_eq!(h.register(&client, &mut authenticator, &invite, "gina").await, 200);
+    assert_eq!(
+        h.register(&client, &mut authenticator, &invite, "gina")
+            .await,
+        200
+    );
     let response = client
         .get(format!("{}/oauth/google/start", h.base))
         .send()
@@ -746,10 +754,21 @@ async fn oauth_flow_connects_gmail_account_end_to_end(pool: PgPool) {
     let consent = Url::parse(&location(&response)).unwrap();
     let params: std::collections::HashMap<_, _> = consent.query_pairs().into_owned().collect();
     let state_param = params.get("state").expect("state param").clone();
-    assert_eq!(params.get("access_type").map(String::as_str), Some("offline"));
+    assert_eq!(
+        params.get("access_type").map(String::as_str),
+        Some("offline")
+    );
     assert_eq!(params.get("prompt").map(String::as_str), Some("consent"));
-    assert_eq!(params.get("code_challenge_method").map(String::as_str), Some("S256"));
-    assert!(params.get("redirect_uri").unwrap().ends_with("/oauth/google/callback"));
+    assert_eq!(
+        params.get("code_challenge_method").map(String::as_str),
+        Some("S256")
+    );
+    assert!(
+        params
+            .get("redirect_uri")
+            .unwrap()
+            .ends_with("/oauth/google/callback")
+    );
 
     // Callback: cookie-less (the cross-site redirect carries no session);
     // the single-use state row authenticates it.
@@ -767,11 +786,16 @@ async fn oauth_flow_connects_gmail_account_end_to_end(pool: PgPool) {
 
     // Account row: gmail provider, granted address, sealed refresh token.
     let user = users::get_by_handle(&pool, "gina").await.unwrap().unwrap();
-    let accounts = arkivo::db::accounts::list_for_user(&pool, user.id).await.unwrap();
+    let accounts = arkivo::db::accounts::list_for_user(&pool, user.id)
+        .await
+        .unwrap();
     assert_eq!(accounts.len(), 1);
     let account = &accounts[0];
     assert_eq!(account.provider, "gmail");
-    assert_eq!(account.account_id.as_deref(), Some(support::fake_gmail::EMAIL));
+    assert_eq!(
+        account.account_id.as_deref(),
+        Some(support::fake_gmail::EMAIL)
+    );
     assert!(account.jmap_session_url.is_none());
     let sealer = Sealer::new(&[7u8; 32], "primary").unwrap();
     assert_eq!(

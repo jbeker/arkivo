@@ -103,7 +103,11 @@ async fn quota_403_is_retried_but_plain_403_is_not() {
     );
     client.get_profile().await.unwrap();
 
-    fake.fail_next_with(1, 403, r#"{"error": {"errors": [{"reason": "forbidden"}]}}"#);
+    fake.fail_next_with(
+        1,
+        403,
+        r#"{"error": {"errors": [{"reason": "forbidden"}]}}"#,
+    );
     let err = client.get_profile().await.unwrap_err();
     assert!(matches!(err, GmailError::Status(403, _)), "got {err:?}");
 }
@@ -171,7 +175,10 @@ async fn history_reports_adds_deletes_and_label_changes() {
     let client = client(&fake);
     let page = client.list_history(&start, None).await.unwrap();
     assert!(page.next_page_token.is_none());
-    assert_eq!(page.history_id.as_deref(), Some(fake.current_history_id().as_str()));
+    assert_eq!(
+        page.history_id.as_deref(),
+        Some(fake.current_history_id().as_str())
+    );
 
     let added: Vec<_> = page
         .history

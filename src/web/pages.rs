@@ -3,6 +3,7 @@
 //! mandates no frontend framework.
 
 use askama::Template;
+use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
@@ -19,6 +20,8 @@ struct LoginPage;
 struct DashboardPage {
     handle: String,
     is_admin: bool,
+    /// True when [google] is configured: shows the "Connect Gmail" card.
+    gmail_enabled: bool,
 }
 
 fn render<T: Template>(template: T) -> Response {
@@ -46,15 +49,16 @@ pub fn public_router() -> Router<WebState> {
 }
 
 pub fn authed_router() -> Router<WebState> {
-    Router::new().route(
-        "/",
-        get(
-            |Extension(CurrentUser(user)): Extension<CurrentUser>| async move {
-                render(DashboardPage {
-                    handle: user.handle.clone(),
-                    is_admin: user.is_admin(),
-                })
-            },
-        ),
-    )
+    Router::new().route("/", get(dashboard))
+}
+
+async fn dashboard(
+    State(state): State<WebState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+) -> Response {
+    render(DashboardPage {
+        handle: user.handle.clone(),
+        is_admin: user.is_admin(),
+        gmail_enabled: state.config.google.is_some(),
+    })
 }

@@ -77,6 +77,12 @@ services:
       # Host-header allowlist for the MCP service (requests arrive with
       # the public hostname via the proxy).
       ARKIVO_MCP__ALLOWED_HOSTS: '["arkivo.example.com"]'
+      # Optional Gmail ingestion: an Internal OAuth client in the
+      # Workspace's Google Cloud project, gmail.readonly scope, redirect
+      # URI https://arkivo.example.com/oauth/google/callback.
+      # Leave unset to hide the "Connect Gmail" flow.
+      ARKIVO_GOOGLE__CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      ARKIVO_GOOGLE__CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     ports:
       - "8480:8080"
     volumes:

@@ -189,11 +189,15 @@ async fn backfill_never_ingests_spam_or_trash(pool: PgPool) {
     let h = harness(&pool).await;
     h.fake
         .add_message("real", "a@example.com", ts(1), &["INBOX"]);
-    h.fake.add_message("junk", "s@example.com", ts(2), &["SPAM"]);
+    h.fake
+        .add_message("junk", "s@example.com", ts(2), &["SPAM"]);
     h.fake
         .add_message("binned", "t@example.com", ts(3), &["TRASH"]);
 
-    assert_eq!(run_backfill(&pool, &h, &BackfillOptions::default()).await, 1);
+    assert_eq!(
+        run_backfill(&pool, &h, &BackfillOptions::default()).await,
+        1
+    );
     assert_eq!(
         messages::counts(&pool, h.account.id).await.unwrap().total,
         1
@@ -250,7 +254,12 @@ async fn poll_label_change_refreshes_metadata_without_redownload(pool: PgPool) {
         .unwrap();
     assert_eq!(msg.keywords.get("$seen"), Some(&serde_json::json!(true)));
     assert_eq!(msg.keywords.get("$flagged"), Some(&serde_json::json!(true)));
-    assert!(msg.mailbox_ids.as_array().unwrap().contains(&serde_json::json!("STARRED")));
+    assert!(
+        msg.mailbox_ids
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("STARRED"))
+    );
     assert_eq!(
         file_count(&h.maildir),
         1,
@@ -263,7 +272,8 @@ async fn poll_skips_new_spam_and_same_page_deletes(pool: PgPool) {
     let h = harness(&pool).await;
     run_backfill(&pool, &h, &BackfillOptions::default()).await; // records history id
 
-    h.fake.add_message("junk", "s@example.com", ts(1), &["SPAM"]);
+    h.fake
+        .add_message("junk", "s@example.com", ts(1), &["SPAM"]);
     let flash = h
         .fake
         .add_message("gone already", "a@example.com", ts(2), &["INBOX"]);
@@ -395,7 +405,8 @@ async fn expired_history_triggers_full_resync_without_destroying_trashed(pool: P
     h.fake.change_labels(&m2, &["TRASH"], &["INBOX"]);
     h.fake
         .add_message("post-expiry", "b@example.com", ts(10), &["INBOX"]);
-    h.fake.add_message("junk", "s@example.com", ts(11), &["SPAM"]);
+    h.fake
+        .add_message("junk", "s@example.com", ts(11), &["SPAM"]);
     h.fake.invalidate_history();
 
     let stats = run_poll(&pool, &h, DeletionPolicy::Mirror).await;

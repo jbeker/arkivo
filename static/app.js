@@ -162,7 +162,24 @@ function table(rows, headers) {
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+// Outcome of a Gmail OAuth round trip, delivered via query param because
+// the callback redirect has no other channel back to the page.
+function surfaceGmailOutcome() {
+  const outcome = new URLSearchParams(location.search).get("gmail");
+  if (!outcome) return;
+  const texts = {
+    connected: ["Gmail connected — click “Import mail” to download it, then “Index for search”.", true],
+    denied: ["Gmail connection cancelled at the Google consent screen.", false],
+    exists: ["That Gmail account is already connected.", false],
+    error: ["Connecting Gmail failed — check the server logs and try again.", false],
+  };
+  const [text, ok] = texts[outcome] || [`gmail: ${outcome}`, false];
+  msg("acct-msg", text, ok);
+  history.replaceState(null, "", location.pathname);
+}
+
 async function loadDashboard(isAdmin) {
+  surfaceGmailOutcome();
   await Promise.all([
     refreshStatus(),
     refreshTokens(),
@@ -250,8 +267,11 @@ function accountPanel(a, running) {
     ? `<span class="pill pill-ok">import complete</span>`
     : `<span class="pill pill-warn">import incomplete</span>`;
 
+  const label = a.provider === "gmail"
+    ? `${esc(a.email || "Gmail")} · Gmail`
+    : accountLabel(a.jmap_session_url);
   const header = `<div class="actions">
-    <strong>${accountLabel(a.jmap_session_url)}</strong>
+    <strong>${label}</strong>
     ${statusPill}
     <span class="push muted mono">#${a.id} · ${a.recency_cutoff_days}-day cutoff · ${esc(a.deletion_policy)}</span>
   </div>`;
@@ -297,7 +317,7 @@ async function refreshStatus() {
     .join('<div style="height: var(--space-md)"></div>');
   document.getElementById("accounts").innerHTML =
     status.accounts.length ? panels
-      : `<p class="empty">No accounts yet. Add a Fastmail account below to begin.</p>`;
+      : `<p class="empty">No accounts yet. Add a Fastmail account or connect Gmail below to begin.</p>`;
 
   // Auto-refresh while anything is running; stop when idle.
   const busy = (status.running_jobs || []).length > 0;

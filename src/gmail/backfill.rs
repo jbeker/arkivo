@@ -88,7 +88,9 @@ pub async fn backfill_account(
     }
 
     let mut cursor = Cursor::from_json(state.backfill_cursor.as_ref());
-    let base_q = options.since.map(|since| format!("after:{}", since.timestamp()));
+    let base_q = options
+        .since
+        .map(|since| format!("after:{}", since.timestamp()));
     // Set when a resumed pageToken is rejected: the date-window fallback.
     let mut window_q: Option<String> = None;
 
@@ -110,7 +112,12 @@ pub async fn backfill_account(
             (None, None) => None,
         };
         let page = match client
-            .list_messages(q.as_deref(), cursor.page_token.as_deref(), page_size as u32, false)
+            .list_messages(
+                q.as_deref(),
+                cursor.page_token.as_deref(),
+                page_size as u32,
+                false,
+            )
             .await
         {
             Ok(page) => page,

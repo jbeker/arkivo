@@ -50,6 +50,11 @@ services:
       ARKIVO_WEB__RP_ID: ${RP_ID:?e.g. arkivo.example.com}
       ARKIVO_WEB__RP_ORIGIN: ${RP_ORIGIN:?e.g. https://arkivo.example.com}
       ARKIVO_MCP__BIND: 0.0.0.0:8081
+      # Optional Gmail ingestion (OAuth client with gmail.readonly scope,
+      # redirect URI ${RP_ORIGIN}/oauth/google/callback). Leave unset to
+      # hide the "Connect Gmail" flow.
+      ARKIVO_GOOGLE__CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      ARKIVO_GOOGLE__CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     ports:
       - "127.0.0.1:8080:8080"
     volumes:

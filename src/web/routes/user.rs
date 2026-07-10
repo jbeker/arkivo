@@ -78,21 +78,39 @@ async fn status(
         let counts = messages::counts(&state.pool, account.id)
             .await
             .unwrap_or_default();
-        let state_row = accounts::get_jmap_state(&state.pool, account.id)
-            .await
-            .ok()
-            .flatten();
+        // Per-provider sync state, presented uniformly.
+        let (backfill_done, last_state_update) = if account.provider == "gmail" {
+            let row = accounts::get_gmail_state(&state.pool, account.id)
+                .await
+                .ok()
+                .flatten();
+            (
+                row.as_ref().map(|s| s.backfill_done),
+                row.as_ref().map(|s| s.updated_at),
+            )
+        } else {
+            let row = accounts::get_jmap_state(&state.pool, account.id)
+                .await
+                .ok()
+                .flatten();
+            (
+                row.as_ref().map(|s| s.backfill_done),
+                row.as_ref().map(|s| s.updated_at),
+            )
+        };
         let recent_jobs = jobs::recent(&state.pool, account.id, 8)
             .await
             .unwrap_or_default();
         out.push(json!({
             "id": account.id,
+            "provider": account.provider,
+            "email": account.account_id,
             "jmap_session_url": account.jmap_session_url,
             "recency_cutoff_days": account.recency_cutoff_days,
             "deletion_policy": account.deletion_policy,
             "poll_interval_secs": account.poll_interval_secs,
-            "backfill_done": state_row.as_ref().map(|s| s.backfill_done),
-            "last_state_update": state_row.as_ref().map(|s| s.updated_at),
+            "backfill_done": backfill_done,
+            "last_state_update": last_state_update,
             "counts": {
                 "total": counts.total,
                 "staged": counts.staged,

@@ -173,7 +173,10 @@ impl SearchClient {
             "OpenSearch /{index}/_search returned {status}: {value}"
         );
         if value.get("timed_out").and_then(Value::as_bool) == Some(true) {
-            tracing::warn!(index, "search hit the {SEARCH_TIMEOUT} deadline; results may be partial");
+            tracing::warn!(
+                index,
+                "search hit the {SEARCH_TIMEOUT} deadline; results may be partial"
+            );
         }
         Ok(value)
     }

@@ -23,6 +23,16 @@
       <button class="btn btn-primary" onclick="addAccount()">Add account</button>
     </div>
   </div>
+
+  {% if gmail_enabled %}
+  <div class="card" style="margin-top: var(--space-md)">
+    <h3 style="margin-top:0">Connect a Gmail account</h3>
+    <div class="field-row">
+      <span>You'll approve read-only access in Google; only the archive can read it.</span>
+      <a class="btn btn-primary" href="/oauth/google/start">Connect Gmail</a>
+    </div>
+  </div>
+  {% endif %}
 </section>
 
 <section>

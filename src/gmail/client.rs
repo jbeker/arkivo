@@ -259,8 +259,9 @@ impl GmailClient {
         let result = self.api_get(&format!("/history?{query}")).await;
         match result {
             Err(GmailError::Status(404, _)) => Err(GmailError::HistoryExpired),
-            other => other
-                .and_then(|v| serde_json::from_value(v).map_err(|e| GmailError::Protocol(e.to_string()))),
+            other => other.and_then(|v| {
+                serde_json::from_value(v).map_err(|e| GmailError::Protocol(e.to_string()))
+            }),
         }
     }
 }

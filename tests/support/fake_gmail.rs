@@ -295,9 +295,7 @@ fn gate(fake: &FakeGmail, headers: &HeaderMap) -> Option<Response> {
 }
 
 async fn token_handler(State(fake): State<FakeGmail>, RawForm(body): RawForm) -> Response {
-    let params: HashMap<String, String> = url::form_urlencoded::parse(&body)
-        .into_owned()
-        .collect();
+    let params: HashMap<String, String> = url::form_urlencoded::parse(&body).into_owned().collect();
     let invalid_grant = || {
         (
             StatusCode::BAD_REQUEST,
@@ -395,7 +393,10 @@ async fn list_handler(
                 )
                     .into_response();
             }
-            match token.strip_prefix("pt-").and_then(|s| s.parse::<usize>().ok()) {
+            match token
+                .strip_prefix("pt-")
+                .and_then(|s| s.parse::<usize>().ok())
+            {
                 Some(o) => o,
                 None => return StatusCode::BAD_REQUEST.into_response(),
             }
@@ -479,9 +480,7 @@ async fn get_handler(
         "historyId": inner.seq.to_string(),
     });
     if params.get("format").map(String::as_str) == Some("raw") {
-        body["raw"] = json!(
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&m.raw)
-        );
+        body["raw"] = json!(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&m.raw));
     }
     Json(body).into_response()
 }
@@ -556,7 +555,12 @@ async fn history_handler(
         .collect();
 
     let total = records.len();
-    let page: Vec<Value> = records.iter().skip(offset).take(max_results).cloned().collect();
+    let page: Vec<Value> = records
+        .iter()
+        .skip(offset)
+        .take(max_results)
+        .cloned()
+        .collect();
     let mut body = json!({
         // Number on purpose (the real history.list sends a string; the
         // client must accept both).

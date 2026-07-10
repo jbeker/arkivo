@@ -1,10 +1,11 @@
 # Arkivo
 
-Email archive with recency-gated, agent-safe search. Arkivo ingests a
-Fastmail account over JMAP into a canonical Maildir store, promotes
-messages past a configurable **recency cutoff** through sanitization
-into OpenSearch (BM25 + semantic vectors), and exposes read-only hybrid
-search to AI agents via an MCP server.
+Email archive with recency-gated, agent-safe search. Arkivo ingests
+mail — a Fastmail account over JMAP, or a Gmail account via the Gmail
+API with OAuth — into a canonical Maildir store, promotes messages past
+a configurable **recency cutoff** through sanitization into OpenSearch
+(BM25 + semantic vectors), and exposes read-only hybrid search to AI
+agents via an MCP server.
 
 The security model (see `email-archive-spec-0.1.md`): a mailbox is a
 recovery root of trust, so agents never touch the live account. A
@@ -28,9 +29,9 @@ for automation (the worker container's cron uses them) and as a fallback:
 |--------------|------|
 | `serve-web`  | Web administration UI (WebAuthn passkeys only) |
 | `serve-mcp`  | Read-only MCP search server (bearer tokens) |
-| `poll`       | Incremental JMAP sync (`--account N` or `--all`) — cron entry point |
+| `poll`       | Incremental sync, JMAP or Gmail per account (`--account N` or `--all`) — cron entry point |
 | `promote`    | Move aged messages through sanitization into the index — cron entry point |
-| `backfill`   | Seed the archive from Fastmail (resumable; `--limit`, `--since`) |
+| `backfill`   | Seed the archive from the mail source (resumable; `--limit`, `--since`) |
 | `reindex`    | Rebuild the search index from the Maildir (`--recreate` for mapping changes) |
 | `migrate`    | Apply database migrations (also runs at serve-web startup) |
 | `bootstrap`  | Mint an admin invite from the CLI (fallback; the web UI offers first-run setup) |
@@ -72,11 +73,28 @@ Everything else happens in the browser:
 1. Open the web UI — with no users yet, it offers **first-run setup**:
    create the first admin with a passkey (no invite needed; the flow
    closes permanently once a user exists).
-2. Add your Fastmail account (read-only API token). The token is
-   validated against the server before it is sealed and stored.
+2. Add your Fastmail account (read-only API token), or press **Connect
+   Gmail** and approve read-only access at Google. Either credential is
+   validated live before it is sealed and stored.
 3. Press **start backfill** — optionally with a message limit as a
    smoke test first. Progress is shown live; the job is cancellable and
    resumable (multi-hour for large mailboxes; interruptions are safe).
+
+### Gmail
+
+Gmail ingestion needs a Google Cloud OAuth client (for a Workspace
+account, an **Internal** app — no verification): enable the Gmail API,
+add the `gmail.readonly` scope to the consent screen, and register the
+redirect URI `<rp_origin>/oauth/google/callback`. Then configure:
+
+```toml
+[google]
+client_id = "...apps.googleusercontent.com"
+client_secret = "..."   # or ARKIVO_GOOGLE__CLIENT_SECRET
+```
+
+The refresh token is sealed like the Fastmail token. Spam and Trash are
+never archived; deletions upstream follow the account's deletion policy.
 
 The worker container polls and promotes on a schedule (`docker/crontab`);
 the same jobs can be triggered manually per account from the dashboard.
