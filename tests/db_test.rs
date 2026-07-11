@@ -308,3 +308,46 @@ async fn audit_log_roundtrip(pool: PgPool) {
     assert_eq!(entries[0].action, "get_message");
     assert_eq!(entries[0].actor, "mcp:1");
 }
+
+#[sqlx::test(migrator = "db::MIGRATOR")]
+async fn disabled_account_is_skipped_by_scheduled_resolution(pool: PgPool) {
+    let user = users::create(&pool, "alice", "user").await.unwrap();
+    let active = accounts::create(&pool, user.id, "https://a.example/jmap", b"s", "k1")
+        .await
+        .unwrap();
+    let paused = accounts::create(&pool, user.id, "https://b.example/jmap", b"s", "k1")
+        .await
+        .unwrap();
+    accounts::set_disabled(&pool, paused.id, true)
+        .await
+        .unwrap();
+
+    // Scheduled poll (--all, active_only) skips the paused account.
+    let polled = arkivo::cmd::resolve_account_ids(&pool, None, true, true)
+        .await
+        .unwrap();
+    assert_eq!(polled, vec![active.id]);
+
+    // Scheduled promote (--all, not active_only) still includes it.
+    let promoted = arkivo::cmd::resolve_account_ids(&pool, None, true, false)
+        .await
+        .unwrap();
+    assert_eq!(promoted, vec![active.id, paused.id]);
+
+    // Explicit --account always resolves: manual invocation is intentional.
+    let explicit = arkivo::cmd::resolve_account_ids(&pool, Some(paused.id), false, true)
+        .await
+        .unwrap();
+    assert_eq!(explicit, vec![paused.id]);
+
+    // Re-enable restores scheduled polling.
+    accounts::set_disabled(&pool, paused.id, false)
+        .await
+        .unwrap();
+    let polled = arkivo::cmd::resolve_account_ids(&pool, None, true, true)
+        .await
+        .unwrap();
+    assert_eq!(polled, vec![active.id, paused.id]);
+    let account = accounts::get(&pool, paused.id).await.unwrap().unwrap();
+    assert!(account.disabled_at.is_none());
+}

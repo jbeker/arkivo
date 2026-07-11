@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select a.id from mail_accounts a\n           join users u on u.id = a.user_id\n           where u.disabled_at is null\n           order by a.id",
+  "query": "select a.id from mail_accounts a\n           join users u on u.id = a.user_id\n           where u.disabled_at is null\n             and (not $1 or a.disabled_at is null)\n           order by a.id",
   "describe": {
     "columns": [
       {
@@ -16,11 +16,13 @@
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Bool"
+      ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "7710a0802c9ea093e80813facab69a58b52fc784f0c5d6e254c250a2a60c15c4"
+  "hash": "e556aefd567edd7291db4c919e5cf0140bc7835bbf61ebb1572fa740ce1329cf"
 }

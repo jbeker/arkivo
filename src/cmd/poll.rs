@@ -16,7 +16,8 @@ pub struct Args {
 
 pub async fn run(config: AppConfig, args: Args) -> Result<()> {
     let pool = crate::db::connect(&config.database_url).await?;
-    let account_ids = super::resolve_account_ids(&pool, args.account, args.all).await?;
+    // active_only: paused accounts are excluded from scheduled polling.
+    let account_ids = super::resolve_account_ids(&pool, args.account, args.all, true).await?;
     let mut failures = 0u32;
     for account_id in account_ids {
         if let Err(e) = run_blocking(&config, &pool, account_id, JobKind::Poll).await {

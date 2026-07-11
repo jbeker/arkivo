@@ -19,6 +19,9 @@ pub struct MailAccount {
     pub poll_interval_secs: Option<i32>,
     pub sanitize_policy: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
+    /// Set = paused: scheduled polling skips this account (manual jobs
+    /// and scheduled promotion still run).
+    pub disabled_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -62,7 +65,7 @@ pub async fn create(
            values ($1, $2, $3, $4)
            returning id, user_id, provider, jmap_session_url, account_id, sealed_token,
                      seal_key_id, recency_cutoff_days, deletion_policy,
-                     poll_interval_secs, sanitize_policy, created_at"#,
+                     poll_interval_secs, sanitize_policy, created_at, disabled_at"#,
         user_id,
         jmap_session_url,
         sealed_token,
@@ -84,7 +87,7 @@ pub async fn get(pool: &PgPool, id: i64) -> Result<Option<MailAccount>> {
     let account = account_query!(
         r#"select id, user_id, provider, jmap_session_url, account_id, sealed_token,
                   seal_key_id, recency_cutoff_days, deletion_policy,
-                  poll_interval_secs, sanitize_policy, created_at
+                  poll_interval_secs, sanitize_policy, created_at, disabled_at
            from mail_accounts where id = $1"#,
         id
     )
@@ -97,7 +100,7 @@ pub async fn list_for_user(pool: &PgPool, user_id: i64) -> Result<Vec<MailAccoun
     let accounts = account_query!(
         r#"select id, user_id, provider, jmap_session_url, account_id, sealed_token,
                   seal_key_id, recency_cutoff_days, deletion_policy,
-                  poll_interval_secs, sanitize_policy, created_at
+                  poll_interval_secs, sanitize_policy, created_at, disabled_at
            from mail_accounts where user_id = $1 order by id"#,
         user_id
     )
@@ -110,6 +113,21 @@ pub async fn delete(pool: &PgPool, id: i64) -> Result<()> {
     sqlx::query!("delete from mail_accounts where id = $1", id)
         .execute(pool)
         .await?;
+    Ok(())
+}
+
+/// Pause or resume scheduled polling for an account. Idempotent;
+/// re-disabling refreshes the timestamp.
+pub async fn set_disabled(pool: &PgPool, id: i64, disabled: bool) -> Result<()> {
+    sqlx::query!(
+        r#"update mail_accounts
+           set disabled_at = case when $2 then now() else null end
+           where id = $1"#,
+        id,
+        disabled,
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -191,7 +209,7 @@ pub async fn create_gmail(
            values ($1, 'gmail', $2, $3, $4)
            returning id, user_id, provider, jmap_session_url, account_id, sealed_token,
                      seal_key_id, recency_cutoff_days, deletion_policy,
-                     poll_interval_secs, sanitize_policy, created_at"#,
+                     poll_interval_secs, sanitize_policy, created_at, disabled_at"#,
         user_id,
         email,
         sealed_refresh_token,

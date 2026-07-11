@@ -266,17 +266,23 @@ function accountPanel(a, running) {
   const statusPill = a.backfill_done
     ? `<span class="pill pill-ok">import complete</span>`
     : `<span class="pill pill-warn">import incomplete</span>`;
+  const pausedPill = a.disabled_at
+    ? `<span class="pill pill-warn">paused</span>` : "";
 
   const label = a.provider === "gmail"
     ? `${esc(a.email || "Gmail")} · Gmail`
     : accountLabel(a.jmap_session_url);
   const header = `<div class="actions">
     <strong>${label}</strong>
-    ${statusPill}
+    ${statusPill}${pausedPill}
     <span class="push muted mono">#${a.id} · ${a.recency_cutoff_days}-day cutoff · ${esc(a.deletion_policy)}</span>
   </div>`;
 
   let body = `<div>${messageSummary(a.counts)}</div>`;
+
+  if (a.disabled_at) {
+    body += `<p class="hint">Paused — scheduled mail checks are off; the buttons below still work.</p>`;
+  }
 
   if (a.counts.staged > 0 && !running.length) {
     body += `<p class="hint">${a.counts.staged} imported but not searchable yet — <strong>Index for search</strong> ` +
@@ -298,6 +304,8 @@ function accountPanel(a, running) {
       <button class="btn btn-ghost" onclick="startBackfill(${a.id}, 'test')">Test import…</button>
       <button class="btn btn-ghost" onclick="changeCutoff(${a.id}, ${a.recency_cutoff_days})">Change cutoff</button>
       <button class="btn btn-ghost" onclick="startJob(${a.id}, 'reindex')">Rebuild index</button>
+      <button class="btn btn-ghost" onclick="setAccountDisabled(${a.id}, ${a.disabled_at ? "false" : "true"})">
+        ${a.disabled_at ? "Resume checks" : "Pause checks"}</button>
       <button class="btn btn-danger push" onclick="removeAccount(${a.id})">Remove</button>
     </div>`;
   }
@@ -404,6 +412,18 @@ async function addAccount() {
     msg("acct-msg", "account added — click “Import mail” to download it, then “Index for search” to make it searchable", true);
     refreshStatus();
   } catch (e) { msg("acct-msg", e.message, false); }
+}
+
+// Pause = scheduled mail checks skip this account; manual buttons and
+// scheduled indexing keep working.
+async function setAccountDisabled(id, disabled) {
+  try {
+    await api(`/api/accounts/${id}`, { disabled }, "PATCH");
+    msg("acct-msg", disabled
+      ? "paused — scheduled mail checks will skip this account"
+      : "resumed — scheduled mail checks include this account again", true);
+  } catch (e) { msg("acct-msg", e.message, false); }
+  refreshStatus();
 }
 
 async function removeAccount(id) {

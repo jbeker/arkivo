@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, user_id, provider, jmap_session_url, account_id, sealed_token,\n                  seal_key_id, recency_cutoff_days, deletion_policy,\n                  poll_interval_secs, sanitize_policy, created_at\n           from mail_accounts where user_id = $1 order by id",
+  "query": "insert into mail_accounts (user_id, provider, account_id, sealed_token, seal_key_id)\n           values ($1, 'gmail', $2, $3, $4)\n           returning id, user_id, provider, jmap_session_url, account_id, sealed_token,\n                     seal_key_id, recency_cutoff_days, deletion_policy,\n                     poll_interval_secs, sanitize_policy, created_at, disabled_at",
   "describe": {
     "columns": [
       {
@@ -134,11 +134,25 @@
             "name": "created_at"
           }
         }
+      },
+      {
+        "ordinal": 12,
+        "name": "disabled_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "disabled_at"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
-        "Int8"
+        "Int8",
+        "Text",
+        "Bytea",
+        "Text"
       ]
     },
     "nullable": [
@@ -153,8 +167,9 @@
       false,
       true,
       true,
-      false
+      false,
+      true
     ]
   },
-  "hash": "02928f799b56d667a66fd9ad4145d371c182ea21d1cf2fa07f4c81ed9fc25846"
+  "hash": "4ce7beff77e79d16263261a4efa8f68b1aeb1df5059818aa35764c748cfb8548"
 }

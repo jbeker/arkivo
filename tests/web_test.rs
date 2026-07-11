@@ -903,3 +903,64 @@ async fn oauth_callback_rejects_denial_bad_state_and_missing_refresh_token(pool:
             .is_empty()
     );
 }
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn account_pause_toggles_via_patch_and_shows_in_status(pool: PgPool) {
+    let h = WebHarness::start(pool.clone()).await;
+    let client = h.client();
+    let invite = make_invite(&pool, "user").await;
+    h.register(&client, &mut softtoken(), &invite, "alice")
+        .await;
+    let fake = support::fake_jmap::FakeJmap::start().await;
+    let response = client
+        .post(format!("{}/api/accounts", h.base))
+        .json(&json!({"jmap_session_url": fake.session_url(), "token": fake.token()}))
+        .send()
+        .await
+        .unwrap();
+    let account_id = response.json::<Value>().await.unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    // Pause: disabled_at set, surfaced in the status JSON.
+    let response = client
+        .patch(format!("{}/api/accounts/{account_id}", h.base))
+        .json(&json!({"disabled": true}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    let account = arkivo::db::accounts::get(&pool, account_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(account.disabled_at.is_some());
+    let status: Value = client
+        .get(format!("{}/api/status", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        status["accounts"][0]["disabled_at"].is_string(),
+        "status must surface the pause: {status}"
+    );
+
+    // A pause-only PATCH must not clobber other settings.
+    assert_eq!(account.recency_cutoff_days, 7);
+
+    // Resume clears it.
+    client
+        .patch(format!("{}/api/accounts/{account_id}", h.base))
+        .json(&json!({"disabled": false}))
+        .send()
+        .await
+        .unwrap();
+    let account = arkivo::db::accounts::get(&pool, account_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(account.disabled_at.is_none());
+}

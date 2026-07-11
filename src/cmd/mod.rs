@@ -53,11 +53,15 @@ pub enum Command {
 }
 
 /// Resolve `--account N` / `--all` into a concrete id list for the
-/// batch subcommands.
+/// batch subcommands. With `active_only`, `--all` skips paused accounts
+/// (poll passes true; promote passes false so already-fetched mail still
+/// ages into the index). An explicit `--account N` always resolves —
+/// manual invocation is intentional.
 pub async fn resolve_account_ids(
     pool: &sqlx::PgPool,
     account: Option<i64>,
     all: bool,
+    active_only: bool,
 ) -> Result<Vec<i64>> {
     if let Some(id) = account {
         return Ok(vec![id]);
@@ -67,7 +71,9 @@ pub async fn resolve_account_ids(
         r#"select a.id from mail_accounts a
            join users u on u.id = a.user_id
            where u.disabled_at is null
-           order by a.id"#
+             and (not $1 or a.disabled_at is null)
+           order by a.id"#,
+        active_only,
     )
     .fetch_all(pool)
     .await?;

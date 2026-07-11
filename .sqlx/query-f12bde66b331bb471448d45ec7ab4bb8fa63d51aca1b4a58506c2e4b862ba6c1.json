@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select a.id, a.user_id,\n                  count(m.id) as \"total!\",\n                  count(m.id) filter (where m.index_status = 'staged') as \"staged!\",\n                  count(m.id) filter (where m.index_status = 'indexed') as \"indexed!\",\n                  count(m.id) filter (where m.index_status = 'quarantined') as \"quarantined!\",\n                  count(m.id) filter (where m.index_status = 'failed') as \"failed!\",\n                  count(m.id) filter (where m.maildir_path is null) as \"unfetched!\"\n           from mail_accounts a\n           left join messages m on m.mail_account_id = a.id and m.deleted_at is null\n           group by a.id, a.user_id\n           order by a.id",
+  "query": "select a.id, a.user_id, a.disabled_at,\n                  count(m.id) as \"total!\",\n                  count(m.id) filter (where m.index_status = 'staged') as \"staged!\",\n                  count(m.id) filter (where m.index_status = 'indexed') as \"indexed!\",\n                  count(m.id) filter (where m.index_status = 'quarantined') as \"quarantined!\",\n                  count(m.id) filter (where m.index_status = 'failed') as \"failed!\",\n                  count(m.id) filter (where m.maildir_path is null) as \"unfetched!\"\n           from mail_accounts a\n           left join messages m on m.mail_account_id = a.id and m.deleted_at is null\n           group by a.id, a.user_id, a.disabled_at\n           order by a.id",
   "describe": {
     "columns": [
       {
@@ -27,36 +27,47 @@
       },
       {
         "ordinal": 2,
+        "name": "disabled_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "disabled_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
         "name": "total!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "staged!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "indexed!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "quarantined!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "failed!",
         "type_info": "Int8",
         "origin": "Expression"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "unfetched!",
         "type_info": "Int8",
         "origin": "Expression"
@@ -68,6 +79,7 @@
     "nullable": [
       false,
       false,
+      true,
       null,
       null,
       null,
@@ -76,5 +88,5 @@
       null
     ]
   },
-  "hash": "c803e365620040a159ad3bd7ccc5e3295338419cafc248d195fb8d5c21bc6f7a"
+  "hash": "f12bde66b331bb471448d45ec7ab4bb8fa63d51aca1b4a58506c2e4b862ba6c1"
 }

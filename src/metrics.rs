@@ -7,7 +7,7 @@ use sqlx::PgPool;
 
 pub async fn gather(pool: &PgPool) -> Result<Value> {
     let accounts = sqlx::query!(
-        r#"select a.id, a.user_id,
+        r#"select a.id, a.user_id, a.disabled_at,
                   count(m.id) as "total!",
                   count(m.id) filter (where m.index_status = 'staged') as "staged!",
                   count(m.id) filter (where m.index_status = 'indexed') as "indexed!",
@@ -16,7 +16,7 @@ pub async fn gather(pool: &PgPool) -> Result<Value> {
                   count(m.id) filter (where m.maildir_path is null) as "unfetched!"
            from mail_accounts a
            left join messages m on m.mail_account_id = a.id and m.deleted_at is null
-           group by a.id, a.user_id
+           group by a.id, a.user_id, a.disabled_at
            order by a.id"#
     )
     .fetch_all(pool)
@@ -53,6 +53,9 @@ pub async fn gather(pool: &PgPool) -> Result<Value> {
             json!({
                 "account_id": a.id,
                 "user_id": a.user_id,
+                // Paused accounts stop polling; exclude them from
+                // poll-age alerting on the Zabbix side.
+                "disabled": a.disabled_at.is_some(),
                 "messages": {
                     "total": a.total, "staged": a.staged, "indexed": a.indexed,
                     "quarantined": a.quarantined, "failed": a.failed,

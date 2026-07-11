@@ -111,6 +111,7 @@ async fn status(
             "poll_interval_secs": account.poll_interval_secs,
             "backfill_done": backfill_done,
             "last_state_update": last_state_update,
+            "disabled_at": account.disabled_at,
             "counts": {
                 "total": counts.total,
                 "staged": counts.staged,
@@ -309,6 +310,8 @@ struct UpdateAccount {
     deletion_policy: Option<String>,
     poll_interval_secs: Option<i32>,
     sanitize_policy: Option<serde_json::Value>,
+    /// true pauses scheduled polling; false resumes it.
+    disabled: Option<bool>,
 }
 
 async fn update_account(
@@ -333,6 +336,11 @@ async fn update_account(
         && policy != "mirror"
     {
         return (StatusCode::BAD_REQUEST, "deletion_policy: retain|mirror").into_response();
+    }
+    if let Some(disabled) = body.disabled
+        && let Err(e) = accounts::set_disabled(&state.pool, account.id, disabled).await
+    {
+        return internal(e);
     }
     let result = sqlx::query!(
         r#"update mail_accounts set
