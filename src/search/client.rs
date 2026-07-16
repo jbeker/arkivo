@@ -244,7 +244,10 @@ impl SearchClient {
     }
 
     /// Bulk-upsert chunk documents, keyed `{message_id}:{chunk_index}` so
-    /// a reindex overwrite is idempotent.
+    /// a reindex overwrite is idempotent. The ndjson body is flushed in
+    /// size-bounded requests: chunk docs carry the full embedding vector
+    /// (~12 KB each), so one giant message in a single `_bulk` blows past
+    /// OpenSearch's http.max_content_length with a 413.
     #[allow(clippy::too_many_arguments)]
     pub async fn bulk_chunks(
         &self,
@@ -256,6 +259,7 @@ impl SearchClient {
         cc: &[String],
         received_at: &str,
     ) -> Result<()> {
+        const BULK_FLUSH_BYTES: usize = 4 * 1024 * 1024;
         if chunks.is_empty() {
             return Ok(());
         }
@@ -281,7 +285,17 @@ impl SearchClient {
                 .to_string(),
             );
             body.push('\n');
+            if body.len() >= BULK_FLUSH_BYTES {
+                self.send_bulk(std::mem::take(&mut body)).await?;
+            }
         }
+        if !body.is_empty() {
+            self.send_bulk(body).await?;
+        }
+        Ok(())
+    }
+
+    async fn send_bulk(&self, body: String) -> Result<()> {
         let response = self
             .request(Method::POST, "/_bulk")
             .header("content-type", "application/x-ndjson")
