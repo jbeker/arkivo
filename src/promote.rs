@@ -30,8 +30,27 @@ pub struct PromoteStats {
 
 const BATCH: i64 = 200;
 
-/// `job`: when present, per-batch progress is written to that jobs row
-/// and its cancel flag is honored at batch boundaries.
+/// How often in-flight progress is written to the jobs row. Frequent
+/// enough that the dashboard (5s poll) never reads stale zeros, cheap
+/// next to per-message embedding cost.
+const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Stats plus the message about to be processed, so a slow message (a
+/// 70 MB pathological email) is visible in the UI instead of the job
+/// looking frozen.
+fn progress_value(stats: &PromoteStats, current: &messages::Message) -> Result<serde_json::Value> {
+    let mut value = serde_json::to_value(stats)?;
+    value["current"] = serde_json::json!({
+        "id": current.id,
+        "subject": current.subject,
+        "size": current.size,
+    });
+    Ok(value)
+}
+
+/// `job`: when present, progress (including the in-flight message) is
+/// written to that jobs row every couple of seconds and its cancel flag
+/// is honored between messages.
 pub async fn promote_account(
     pool: &PgPool,
     store: &dyn MessageStore,
@@ -49,12 +68,25 @@ pub async fn promote_account(
     let indexer = Indexer { search, embedder };
 
     let mut stats = PromoteStats::default();
-    loop {
+    // None forces a progress write before the very first message: if that
+    // one is slow, the UI must already show what the job is chewing on.
+    let mut last_progress: Option<std::time::Instant> = None;
+    'sweep: loop {
         let batch = messages::promotable(pool, account.id, cutoff, BATCH).await?;
         if batch.is_empty() {
             break;
         }
         for msg in &batch {
+            if let Some(job_id) = job
+                && last_progress.is_none_or(|at| at.elapsed() >= PROGRESS_EVERY)
+            {
+                crate::db::jobs::update_stats(pool, job_id, &progress_value(&stats, msg)?).await?;
+                last_progress = Some(std::time::Instant::now());
+                if crate::db::jobs::is_cancel_requested(pool, job_id).await? {
+                    stats.cancelled = true;
+                    break 'sweep;
+                }
+            }
             match promote_one(pool, store, &indexer, &policy, account, msg, &mut stats).await {
                 Ok(()) => {}
                 Err(e) => {

@@ -204,10 +204,28 @@ function jobProgress(job, account) {
   }
   if (job.kind === "promote" || job.kind === "reindex") {
     const verb = job.kind === "reindex" ? "Rebuilding search index" : "Indexing for search";
-    return `${verb} \u2014 ${s.promoted ?? 0} indexed, ${s.failed ?? 0} failed`;
+    let line = `${verb} \u2014 ${Number(s.promoted ?? 0).toLocaleString()} indexed, ` +
+      `${Number(s.failed ?? 0).toLocaleString()} failed`;
+    if (s.quarantined) line += `, ${Number(s.quarantined).toLocaleString()} quarantined`;
+    if (s.deduped) line += `, ${Number(s.deduped).toLocaleString()} duplicates`;
+    // counts.staged refreshes with each poll, so this is live "left to do".
+    if (account?.counts?.staged) {
+      line += ` \u00b7 ~${Number(account.counts.staged).toLocaleString()} remaining`;
+    }
+    if (s.current) {
+      line += ` \u00b7 now: \u201c${esc(s.current.subject || "(no subject)")}\u201d` +
+        `${s.current.size ? ` (${fmtSize(s.current.size)})` : ""}`;
+    }
+    return line;
   }
   if (job.kind === "poll") return "Checking for new mail\u2026";
   return `${job.kind} running\u2026`;
+}
+
+function fmtSize(bytes) {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
 }
 
 // A short, human identity for an account: the JMAP host, not the full URL.
