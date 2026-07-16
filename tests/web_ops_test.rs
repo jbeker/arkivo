@@ -420,3 +420,123 @@ async fn promote_runs_through_the_api(pool: PgPool) {
     let search = SearchClient::new(&h.config.opensearch).unwrap();
     search.delete_user_indices(h.user_id).await.unwrap();
 }
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn failed_messages_list_and_retry_through_the_api(pool: PgPool) {
+    if std::env::var("ARKIVO_TEST_OPENSEARCH_URL").is_err() {
+        eprintln!("skipping: ARKIVO_TEST_OPENSEARCH_URL not set");
+        return;
+    }
+    let h = OpsHarness::start(pool.clone()).await;
+    h.fake.add_message("first", "a@example.com", ts(1));
+    h.fake.add_message("second", "a@example.com", ts(2));
+
+    let (status, _) = h
+        .api(
+            reqwest::Method::POST,
+            &format!("/api/accounts/{}/backfill", h.account_id),
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(status, 202);
+    h.wait_idle().await;
+
+    // Simulate an indexing outage: both messages failed with errors that
+    // differ only by an embedded id, so they must group as one cause.
+    sqlx::query(
+        "update messages
+         set index_status = 'failed', indexed_at = null,
+             error = 'OpenSearch /msg/_doc/' || id || ' returned 429'
+         where mail_account_id = $1",
+    )
+    .bind(h.account_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let (status, problems) = h
+        .api(
+            reqwest::Method::GET,
+            &format!("/api/accounts/{}/problems", h.account_id),
+            None,
+        )
+        .await;
+    assert_eq!(status, 200);
+    let groups = problems["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 1, "digit-normalized errors group as one: {problems}");
+    assert_eq!(groups[0]["count"], 2);
+    assert_eq!(groups[0]["status"], "failed");
+    let error_key = groups[0]["error_key"].as_str().unwrap().to_string();
+
+    let (status, samples) = h
+        .api(
+            reqwest::Method::GET,
+            &format!(
+                "/api/accounts/{}/problems/messages?status=failed&error_key={}",
+                h.account_id,
+                url::form_urlencoded::byte_serialize(error_key.as_bytes()).collect::<String>(),
+            ),
+            None,
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(samples["messages"].as_array().unwrap().len(), 2);
+    assert!(samples["messages"][0]["retryable"].as_bool().unwrap());
+
+    // Ownership guard: a foreign account id is a 404.
+    let (status, _) = h
+        .api(
+            reqwest::Method::GET,
+            &format!("/api/accounts/{}/problems", h.account_id + 999),
+            None,
+        )
+        .await;
+    assert_eq!(status, 404);
+
+    // Retry all failed: re-stages both and spawns a promote job.
+    let (status, retry) = h
+        .api(
+            reqwest::Method::POST,
+            &format!("/api/accounts/{}/problems/retry", h.account_id),
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(retry["requeued"], 2, "both failures re-staged: {retry}");
+    assert!(retry["job_id"].is_i64(), "promote spawned: {retry}");
+
+    let final_status = h.wait_idle().await;
+    assert_eq!(final_status["accounts"][0]["counts"]["failed"], 0);
+    assert_eq!(
+        final_status["accounts"][0]["counts"]["indexed"], 2,
+        "retried messages made it into the index: {final_status}"
+    );
+
+    let (status, problems) = h
+        .api(
+            reqwest::Method::GET,
+            &format!("/api/accounts/{}/problems", h.account_id),
+            None,
+        )
+        .await;
+    assert_eq!(status, 200);
+    assert!(problems["groups"].as_array().unwrap().is_empty());
+
+    // A healthy (indexed) message refuses a per-message retry.
+    let msg_id: i64 = sqlx::query_scalar("select id from messages where mail_account_id = $1 limit 1")
+        .bind(h.account_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (status, _) = h
+        .api(
+            reqwest::Method::POST,
+            &format!("/api/accounts/{}/messages/{}/retry", h.account_id, msg_id),
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(status, 409);
+
+    let search = SearchClient::new(&h.config.opensearch).unwrap();
+    search.delete_user_indices(h.user_id).await.unwrap();
+}
