@@ -1,0 +1,63 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select index_status,\n                  regexp_replace(left(error, 240), '\\d+', '#', 'g') as error_key,\n                  min(left(error, 500)) as sample_error,\n                  count(*) as \"count!\",\n                  min(received_at) as \"first_at!\",\n                  max(received_at) as \"last_at!\"\n           from messages\n           where mail_account_id = $1 and deleted_at is null\n             and index_status in ('failed', 'quarantined')\n           group by 1, 2\n           order by count(*) desc\n           limit 50",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "index_status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "index_status"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "error_key",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "sample_error",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "count!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "first_at!",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "last_at!",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "2c8261f019093287142f3d50e6999986c24dc85832c1b2b3174f6a5ad5f1b679"
+}

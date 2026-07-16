@@ -1,0 +1,93 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, subject, from_addr, received_at, index_status,\n                  left(error, 2000) as error,\n                  (maildir_path is not null) as \"retryable!\"\n           from messages\n           where mail_account_id = $1 and deleted_at is null\n             and index_status = $2\n             and ($3::text is null\n                  or regexp_replace(left(error, 240), '\\d+', '#', 'g') = $3)\n           order by received_at desc\n           limit $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "subject",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "subject"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "from_addr",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "from_addr"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "received_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "received_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "index_status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "index_status"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "error",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "retryable!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "54bdc058725e945673b29d45b04b96656fef02f2cd4115bea57c622c1e7e00af"
+}

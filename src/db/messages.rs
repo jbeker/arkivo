@@ -260,6 +260,133 @@ pub struct AccountCounts {
     pub unfetched: i64,
 }
 
+/// Failed/quarantined messages rolled up by root cause. Mass failures
+/// (an embedding or OpenSearch outage) share a handful of error shapes;
+/// digits are normalized away so per-message ids and ports don't split
+/// one cause into thousands of groups.
+#[derive(Debug)]
+pub struct ProblemGroup {
+    pub index_status: String,
+    pub error_key: Option<String>,
+    pub sample_error: Option<String>,
+    pub count: i64,
+    pub first_at: DateTime<Utc>,
+    pub last_at: DateTime<Utc>,
+}
+
+pub async fn problem_groups(pool: &PgPool, mail_account_id: i64) -> Result<Vec<ProblemGroup>> {
+    let groups = sqlx::query_as!(
+        ProblemGroup,
+        r#"select index_status,
+                  regexp_replace(left(error, 240), '\d+', '#', 'g') as error_key,
+                  min(left(error, 500)) as sample_error,
+                  count(*) as "count!",
+                  min(received_at) as "first_at!",
+                  max(received_at) as "last_at!"
+           from messages
+           where mail_account_id = $1 and deleted_at is null
+             and index_status in ('failed', 'quarantined')
+           group by 1, 2
+           order by count(*) desc
+           limit 50"#,
+        mail_account_id,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(groups)
+}
+
+/// A failed or quarantined message, projected for the dashboard.
+#[derive(Debug)]
+pub struct ProblemMessage {
+    pub id: i64,
+    pub subject: Option<String>,
+    pub from_addr: Option<String>,
+    pub received_at: DateTime<Utc>,
+    pub index_status: String,
+    pub error: Option<String>,
+    /// False when the blob was never downloaded — a retry can't index it.
+    pub retryable: bool,
+}
+
+/// Sample messages within one problem group (or the whole status when
+/// `error_key` is None). Samples are for diagnosis; bulk action is
+/// retry-by-group, so there is no pagination.
+pub async fn problem_messages(
+    pool: &PgPool,
+    mail_account_id: i64,
+    index_status: &str,
+    error_key: Option<&str>,
+    limit: i64,
+) -> Result<Vec<ProblemMessage>> {
+    let msgs = sqlx::query_as!(
+        ProblemMessage,
+        r#"select id, subject, from_addr, received_at, index_status,
+                  left(error, 2000) as error,
+                  (maildir_path is not null) as "retryable!"
+           from messages
+           where mail_account_id = $1 and deleted_at is null
+             and index_status = $2
+             and ($3::text is null
+                  or regexp_replace(left(error, 240), '\d+', '#', 'g') = $3)
+           order by received_at desc
+           limit $4"#,
+        mail_account_id,
+        index_status,
+        error_key,
+        limit,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(msgs)
+}
+
+/// Re-stage failed messages so the next promote run retries them,
+/// optionally scoped to one error group. Quarantined rows are excluded:
+/// re-checking without a sanitize-policy change just re-quarantines, so
+/// that is a deliberate per-message action (`requeue_one`).
+pub async fn requeue_failed(
+    pool: &PgPool,
+    mail_account_id: i64,
+    error_key: Option<&str>,
+) -> Result<u64> {
+    let result = sqlx::query!(
+        r#"update messages
+           set index_status = 'staged', error = null, indexed_at = null, pipeline_version = null
+           where mail_account_id = $1
+             and index_status = 'failed'
+             and deleted_at is null
+             and maildir_path is not null
+             and ($2::text is null
+                  or regexp_replace(left(error, 240), '\d+', '#', 'g') = $2)"#,
+        mail_account_id,
+        error_key,
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// Re-stage one failed or quarantined message. A single guarded UPDATE:
+/// returns false when the message isn't the account's, isn't in a
+/// retryable status, or its blob was never downloaded.
+pub async fn requeue_one(pool: &PgPool, id: i64, mail_account_id: i64) -> Result<bool> {
+    let result = sqlx::query!(
+        r#"update messages
+           set index_status = 'staged', error = null, indexed_at = null, pipeline_version = null
+           where id = $1
+             and mail_account_id = $2
+             and index_status in ('failed', 'quarantined')
+             and deleted_at is null
+             and maildir_path is not null"#,
+        id,
+        mail_account_id,
+    )
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
 pub async fn counts(pool: &PgPool, mail_account_id: i64) -> Result<AccountCounts> {
     let rec = sqlx::query!(
         r#"select

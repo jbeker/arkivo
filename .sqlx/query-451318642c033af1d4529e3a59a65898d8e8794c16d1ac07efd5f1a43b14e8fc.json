@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update messages\n           set index_status = 'staged', error = null, indexed_at = null, pipeline_version = null\n           where mail_account_id = $1\n             and index_status = 'failed'\n             and deleted_at is null\n             and maildir_path is not null\n             and ($2::text is null\n                  or regexp_replace(left(error, 240), '\\d+', '#', 'g') = $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "451318642c033af1d4529e3a59a65898d8e8794c16d1ac07efd5f1a43b14e8fc"
+}

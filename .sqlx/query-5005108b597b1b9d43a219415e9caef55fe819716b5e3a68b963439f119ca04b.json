@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update messages\n           set index_status = 'staged', error = null, indexed_at = null, pipeline_version = null\n           where id = $1\n             and mail_account_id = $2\n             and index_status in ('failed', 'quarantined')\n             and deleted_at is null\n             and maildir_path is not null",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5005108b597b1b9d43a219415e9caef55fe819716b5e3a68b963439f119ca04b"
+}
