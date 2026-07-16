@@ -3,7 +3,7 @@
 //! query is constrained to the session user; ownership checks guard all
 //! path-parameter resources.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
@@ -27,6 +27,16 @@ pub fn router() -> Router<WebState> {
         .route("/api/accounts/{id}/poll", post(start_poll))
         .route("/api/accounts/{id}/promote", post(start_promote))
         .route("/api/accounts/{id}/reindex", post(start_reindex))
+        .route("/api/accounts/{id}/problems", get(list_problems))
+        .route(
+            "/api/accounts/{id}/problems/messages",
+            get(list_problem_messages),
+        )
+        .route("/api/accounts/{id}/problems/retry", post(retry_failed))
+        .route(
+            "/api/accounts/{id}/messages/{msg_id}/retry",
+            post(retry_message),
+        )
         .route("/api/jobs/{id}/cancel", post(cancel_job))
         .route("/api/tokens", post(mint_token).get(list_tokens))
         .route("/api/tokens/{id}", delete(revoke_token))
@@ -226,6 +236,167 @@ async fn start_reindex(
         crate::ops::JobKind::Reindex { recreate },
     )
     .await
+}
+
+/// Try to start a promote for an account the caller is known to own.
+/// None = a promote/reindex is already running, which is fine for a
+/// retry: the running loop re-queries staged rows and picks them up.
+async fn spawn_promote_if_free(state: &WebState, account_id: i64) -> Option<i64> {
+    match crate::ops::try_start(
+        &state.config,
+        &state.pool,
+        account_id,
+        crate::ops::JobKind::Promote,
+    )
+    .await
+    {
+        Ok(Some(started)) => {
+            let job_id = started.job_id;
+            crate::ops::spawn_detached(state.config.clone(), state.pool.clone(), started);
+            Some(job_id)
+        }
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(error = %e, "retry: promote spawn failed");
+            None
+        }
+    }
+}
+
+/// Failed/quarantined messages grouped by root cause — the primary view;
+/// an account can hold tens of thousands of failures from one outage.
+async fn list_problems(
+    State(state): State<WebState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<i64>,
+) -> Response {
+    let Some(account) = (match owned_account(&state, user.id, id).await {
+        Ok(a) => a,
+        Err(r) => return r,
+    }) else {
+        return not_found();
+    };
+    match messages::problem_groups(&state.pool, account.id).await {
+        Ok(groups) => Json(json!({
+            "groups": groups.iter().map(|g| json!({
+                "status": g.index_status, "error_key": g.error_key,
+                "sample_error": g.sample_error, "count": g.count,
+                "first_at": g.first_at, "last_at": g.last_at,
+            })).collect::<Vec<_>>()
+        }))
+        .into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+const PROBLEM_SAMPLES: i64 = 50;
+
+#[derive(Deserialize)]
+struct ProblemMessagesQuery {
+    status: String,
+    error_key: Option<String>,
+}
+
+async fn list_problem_messages(
+    State(state): State<WebState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<i64>,
+    Query(q): Query<ProblemMessagesQuery>,
+) -> Response {
+    if q.status != "failed" && q.status != "quarantined" {
+        return (StatusCode::BAD_REQUEST, "status: failed|quarantined").into_response();
+    }
+    let Some(account) = (match owned_account(&state, user.id, id).await {
+        Ok(a) => a,
+        Err(r) => return r,
+    }) else {
+        return not_found();
+    };
+    match messages::problem_messages(
+        &state.pool,
+        account.id,
+        &q.status,
+        q.error_key.as_deref(),
+        PROBLEM_SAMPLES,
+    )
+    .await
+    {
+        Ok(msgs) => Json(json!({
+            "messages": msgs.iter().map(|m| json!({
+                "id": m.id, "subject": m.subject, "from": m.from_addr,
+                "received_at": m.received_at, "status": m.index_status,
+                "error": m.error, "retryable": m.retryable,
+            })).collect::<Vec<_>>()
+        }))
+        .into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct RetryFailed {
+    /// Scope the retry to one error group; omitted = all failed.
+    error_key: Option<String>,
+}
+
+async fn retry_failed(
+    State(state): State<WebState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<i64>,
+    body: Option<Json<RetryFailed>>,
+) -> Response {
+    let Some(account) = (match owned_account(&state, user.id, id).await {
+        Ok(a) => a,
+        Err(r) => return r,
+    }) else {
+        return not_found();
+    };
+    let error_key = body.and_then(|Json(b)| b.error_key);
+    let requeued =
+        match messages::requeue_failed(&state.pool, account.id, error_key.as_deref()).await {
+            Ok(n) => n,
+            Err(e) => return internal(e),
+        };
+    let job_id = if requeued > 0 {
+        spawn_promote_if_free(&state, account.id).await
+    } else {
+        None
+    };
+    let _ = audit::record(
+        &state.pool,
+        Some(user.id),
+        &format!("session:{}", user.id),
+        "messages_requeued",
+        None,
+        Some(&json!({"account_id": account.id, "count": requeued})),
+    )
+    .await;
+    Json(json!({"requeued": requeued, "job_id": job_id})).into_response()
+}
+
+async fn retry_message(
+    State(state): State<WebState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path((id, msg_id)): Path<(i64, i64)>,
+) -> Response {
+    let Some(account) = (match owned_account(&state, user.id, id).await {
+        Ok(a) => a,
+        Err(r) => return r,
+    }) else {
+        return not_found();
+    };
+    match messages::requeue_one(&state.pool, msg_id, account.id).await {
+        Ok(true) => {
+            let job_id = spawn_promote_if_free(&state, account.id).await;
+            Json(json!({"requeued": 1, "job_id": job_id})).into_response()
+        }
+        Ok(false) => (
+            StatusCode::CONFLICT,
+            "message cannot be retried (already indexed, already queued, or not yet downloaded)",
+        )
+            .into_response(),
+        Err(e) => internal(e),
+    }
 }
 
 async fn cancel_job(
