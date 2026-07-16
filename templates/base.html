@@ -160,6 +160,17 @@
       padding: .12rem .35rem; border-radius: 4px; word-break: break-all; border: 1px solid var(--border); }
     .mono { font-family: var(--font-mono); font-size: .9em; }
     .muted { color: var(--ink-faint); }
+
+    /* Problem messages (failed / quarantined) ----------------------------- */
+    .problems { display: flex; flex-direction: column; gap: var(--space-sm);
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: var(--space-sm) var(--space-md); background: var(--surface-2); }
+    .problem-group + .problem-group { border-top: 1px solid var(--border); padding-top: var(--space-sm); }
+    .problem-err { font-size: var(--text-sm); color: var(--ink-soft); word-break: break-word;
+      margin: var(--space-2xs) 0 0; }
+    .problem-err summary { cursor: pointer; }
+    .err-full { white-space: pre-wrap; word-break: break-word;
+      font-size: var(--text-xs); margin-top: var(--space-2xs); }
   </style>
 </head>
 <body>

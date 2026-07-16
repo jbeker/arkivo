@@ -280,6 +280,15 @@ function accountPanel(a, running) {
 
   let body = `<div>${messageSummary(a.counts)}</div>`;
 
+  const problems = (a.counts.failed || 0) + (a.counts.quarantined || 0);
+  if (problems > 0) {
+    const open = openProblems.has(a.id);
+    body += `<p class="hint"><a href="#" onclick="toggleProblems(${a.id});return false">` +
+      `${open ? "Hide" : "Show"} ${problems.toLocaleString()} message${problems === 1 ? "" : "s"} ` +
+      `that couldn’t be indexed</a></p>`;
+    if (open) body += problemsSection(a);
+  }
+
   if (a.disabled_at) {
     body += `<p class="hint">Paused — scheduled mail checks are off; the buttons below still work.</p>`;
   }
@@ -335,6 +344,175 @@ async function refreshStatus() {
     clearInterval(refreshTimer);
     refreshTimer = null;
   }
+}
+
+// ---- problem messages (failed / quarantined) --------------------------------
+
+// Expanded state and fetched data live at module level so they survive
+// refreshStatus(), which rewrites #accounts wholesale every 5s while a
+// job runs.
+const openProblems = new Set();   // account ids with the section open
+const problemsCache = {};         // account id -> {groups, samples: {groupIdx: [...]}}
+const openGroups = new Set();     // `${accountId}:${groupIdx}`
+
+async function fetchProblems(id) {
+  const data = await api(`/api/accounts/${id}/problems`, undefined, "GET");
+  problemsCache[id] = { groups: data.groups || [], samples: {} };
+}
+
+async function toggleProblems(id) {
+  if (openProblems.has(id)) {
+    openProblems.delete(id);
+    for (const k of [...openGroups]) if (k.startsWith(`${id}:`)) openGroups.delete(k);
+  } else {
+    try {
+      await fetchProblems(id);
+      openProblems.add(id);
+    } catch (e) { msg("acct-msg", e.message, false); }
+  }
+  refreshStatus();
+}
+
+async function toggleGroup(accountId, idx) {
+  const key = `${accountId}:${idx}`;
+  if (openGroups.has(key)) {
+    openGroups.delete(key);
+  } else {
+    const cache = problemsCache[accountId];
+    const g = cache?.groups[idx];
+    if (!g) return;
+    try {
+      const params = new URLSearchParams({ status: g.status });
+      if (g.error_key != null) params.set("error_key", g.error_key);
+      const data = await api(`/api/accounts/${accountId}/problems/messages?${params}`, undefined, "GET");
+      cache.samples[idx] = data.messages || [];
+      openGroups.add(key);
+    } catch (e) { msg("acct-msg", e.message, false); }
+  }
+  refreshStatus();
+}
+
+const shortDate = (ts) => String(ts || "").slice(0, 10);
+
+// Truncate raw text BEFORE escaping so an entity is never cut in half.
+function errCell(raw, cutoff) {
+  const text = raw || "(no error recorded)";
+  if (text.length <= cutoff) return esc(text);
+  return `<details><summary>${esc(text.slice(0, cutoff))}…</summary>` +
+    `<div class="mono err-full">${esc(text)}</div></details>`;
+}
+
+// One row per root cause: mass failures share a few error shapes, so
+// 85k failed messages render as a short list, not a giant table.
+function problemGroupRow(a, g, idx) {
+  const open = openGroups.has(`${a.id}:${idx}`);
+  const pill = g.status === "quarantined"
+    ? `<span class="pill pill-warn">quarantined</span>`
+    : `<span class="pill pill-danger">failed</span>`;
+  const range = g.first_at && shortDate(g.first_at) !== shortDate(g.last_at)
+    ? `${shortDate(g.first_at)} – ${shortDate(g.last_at)}`
+    : shortDate(g.last_at);
+  const retry = g.status === "failed"
+    ? `<button class="btn btn-sm" onclick="retryGroup(${a.id}, ${idx})">Retry these</button>` : "";
+  let html = `<div class="problem-group">
+    <div class="actions">
+      ${pill}
+      <strong>${Number(g.count).toLocaleString()}</strong>
+      <span class="muted">${range}</span>
+      <span class="push"></span>
+      ${retry}
+      <button class="btn btn-sm btn-ghost" onclick="toggleGroup(${a.id}, ${idx})">
+        ${open ? "Hide" : "Show"} examples</button>
+    </div>
+    <div class="problem-err">${errCell(g.sample_error, 160)}</div>`;
+  if (open) html += sampleTable(a, idx);
+  return html + `</div>`;
+}
+
+function sampleTable(a, idx) {
+  const cache = problemsCache[a.id];
+  const msgs = cache?.samples[idx];
+  if (!msgs) return "";
+  const rows = msgs.map((m) => {
+    const action = !m.retryable
+      ? `<span class="muted">needs re-import</span>`
+      : m.status === "quarantined"
+        ? `<button class="btn btn-sm btn-ghost" onclick="retryMessage(${a.id}, ${m.id}, true)">Re-check</button>`
+        : `<button class="btn btn-sm" onclick="retryMessage(${a.id}, ${m.id}, false)">Retry</button>`;
+    return [esc(m.subject || "(no subject)"), esc(m.from || ""), shortDate(m.received_at), action];
+  });
+  const g = cache.groups[idx];
+  const note = g.count > msgs.length
+    ? `<p class="hint">showing ${msgs.length} of ${Number(g.count).toLocaleString()}</p>` : "";
+  return table(rows, ["subject", "from", "received", ""]) + note;
+}
+
+function problemsSection(a) {
+  const cache = problemsCache[a.id];
+  if (!cache) return `<p class="hint">Loading…</p>`;
+  let html = `<div class="problems">`;
+  if (a.counts.failed > 0) {
+    html += `<div class="actions">
+      <button class="btn btn-sm" onclick="retryAllFailed(${a.id}, ${a.counts.failed})">
+        Retry all ${Number(a.counts.failed).toLocaleString()} failed</button>
+    </div>`;
+  }
+  html += cache.groups.map((g, idx) => problemGroupRow(a, g, idx)).join("");
+  html += `<p class="hint">Retrying re-runs indexing now; mail newer than the ${a.recency_cutoff_days}-day ` +
+    `cutoff is indexed automatically once it ages. Quarantined mail was blocked on purpose by the ` +
+    `sanitize policy — “Re-check” re-evaluates it and will quarantine it again unless the ` +
+    `policy changed.</p>`;
+  return html + `</div>`;
+}
+
+// After a retry the group counts shift, so refetch and drop stale
+// sample expansions (indices may no longer line up).
+async function reloadProblems(id) {
+  if (!openProblems.has(id)) return;
+  for (const k of [...openGroups]) if (k.startsWith(`${id}:`)) openGroups.delete(k);
+  try {
+    await fetchProblems(id);
+    if (!problemsCache[id].groups.length) openProblems.delete(id);
+  } catch { openProblems.delete(id); }
+}
+
+function retryToast(r) {
+  const n = Number(r.requeued).toLocaleString();
+  msg("acct-msg", `${n} message${r.requeued === 1 ? "" : "s"} queued for retry` +
+    (r.job_id ? " — indexing started" :
+      " — an indexing job is already running and will pick them up"), true);
+}
+
+async function doRetryFailed(accountId, errorKey, count) {
+  if (count > 1000 && !confirm(
+    `Retry ${Number(count).toLocaleString()} messages? Re-indexing them may take a while; ` +
+    `the job can be cancelled from the account card.`)) return;
+  try {
+    const body = errorKey != null ? { error_key: errorKey } : {};
+    retryToast(await api(`/api/accounts/${accountId}/problems/retry`, body));
+  } catch (e) { msg("acct-msg", e.message, false); }
+  await reloadProblems(accountId);
+  refreshStatus();
+}
+
+async function retryAllFailed(accountId, count) {
+  await doRetryFailed(accountId, null, count);
+}
+
+async function retryGroup(accountId, idx) {
+  const g = problemsCache[accountId]?.groups[idx];
+  if (g) await doRetryFailed(accountId, g.error_key, g.count);
+}
+
+async function retryMessage(accountId, msgId, quarantined) {
+  if (quarantined && !confirm(
+    "Re-check this quarantined message against the current sanitize policy? " +
+    "Unless the policy changed, it will be quarantined again.")) return;
+  try {
+    retryToast(await api(`/api/accounts/${accountId}/messages/${msgId}/retry`, {}));
+  } catch (e) { msg("acct-msg", e.message, false); }
+  await reloadProblems(accountId);
+  refreshStatus();
 }
 
 // Full import (mode omitted) runs directly — no dialog. `mode === 'test'`
