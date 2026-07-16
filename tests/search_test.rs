@@ -904,3 +904,101 @@ async fn hybrid_pagination_skips_and_reports_has_more() {
 
     search.delete_user_indices(user_id).await.unwrap();
 }
+
+/// A pathological message (the 70 MB "bree mirror" class) must not
+/// monopolize the pipeline: the msg doc body is capped and the embedding
+/// budget bounds chunk count.
+#[tokio::test]
+async fn giant_message_is_capped() {
+    use arkivo::search::indexer::{MAX_BODY_INDEX_CHARS, MAX_EMBED_CHUNKS};
+
+    let search = require_opensearch!();
+    let user_id = test_user_id();
+    let embedder = FakeEmbedder::default();
+    search
+        .ensure_user_indices(user_id, embedder.dimension())
+        .await
+        .unwrap();
+
+    // ~3M chars of distinct words, well past both caps.
+    let giant: String = (0..400_000)
+        .map(|i| format!("w{i}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(giant.chars().count() > 2 * MAX_BODY_INDEX_CHARS);
+
+    let indexer = Indexer {
+        search: &search,
+        embedder: &embedder,
+    };
+    let outcome = indexer
+        .index_message(user_id, &message(1, "giant"), &email("giant", &giant), true)
+        .await
+        .unwrap();
+    assert_eq!(outcome.chunks, MAX_EMBED_CHUNKS);
+    search.refresh_user_indices(user_id).await.unwrap();
+
+    let doc = search.get_msg_doc(user_id, 1).await.unwrap().unwrap();
+    let stored = doc["body_text"].as_str().unwrap();
+    assert_eq!(stored.chars().count(), MAX_BODY_INDEX_CHARS);
+    assert!(giant.starts_with(stored));
+
+    let url = std::env::var("ARKIVO_TEST_OPENSEARCH_URL").unwrap();
+    let index = arkivo::search::mappings::chunk_index_name(user_id);
+    let count: serde_json::Value = reqwest::get(format!("{url}/{index}/_count"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(count["count"], MAX_EMBED_CHUNKS as i64);
+
+    search.delete_user_indices(user_id).await.unwrap();
+}
+
+/// bulk_chunks must split oversized payloads into multiple `_bulk`
+/// requests: ~1000 docs with real-size 768-dim vectors is several times
+/// the 4 MB flush threshold, and previously 413'd as one request.
+#[tokio::test]
+async fn oversized_bulk_is_split() {
+    let search = require_opensearch!();
+    let user_id = test_user_id();
+    let embedder = FakeEmbedder::default();
+    search
+        .ensure_user_indices(user_id, embedder.dimension())
+        .await
+        .unwrap();
+
+    let pad = "lorem ipsum ".repeat(40);
+    let chunks: Vec<(usize, String, Vec<f32>)> = (0..1000)
+        .map(|i| {
+            let vector = vec![0.12345678f32 + i as f32 * 1e-7; embedder.dimension()];
+            (i, format!("chunk {i} {pad}"), vector)
+        })
+        .collect();
+    search
+        .bulk_chunks(
+            user_id,
+            1,
+            &chunks,
+            &["alice@example.com".into()],
+            &["owner@example.com".into()],
+            &[],
+            "2019-05-01T12:00:00Z",
+        )
+        .await
+        .unwrap();
+    search.refresh_user_indices(user_id).await.unwrap();
+
+    let url = std::env::var("ARKIVO_TEST_OPENSEARCH_URL").unwrap();
+    let index = arkivo::search::mappings::chunk_index_name(user_id);
+    let count: serde_json::Value = reqwest::get(format!("{url}/{index}/_count"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(count["count"], 1000);
+
+    search.delete_user_indices(user_id).await.unwrap();
+}

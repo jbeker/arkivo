@@ -90,7 +90,7 @@ impl OllamaEmbedder {
 }
 
 /// Trim `s` to at most `max_chars` characters on a UTF-8 boundary.
-fn truncate_chars(s: &str, max_chars: usize) -> &str {
+pub(crate) fn truncate_chars(s: &str, max_chars: usize) -> &str {
     match s.char_indices().nth(max_chars) {
         Some((idx, _)) => &s[..idx],
         None => s,
