@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into imap_folders (mail_account_id, folder, uidvalidity, last_seen_uidnext)\n           values ($1, $2, $3, $4)\n           on conflict (mail_account_id, folder) do update\n               set uidvalidity = excluded.uidvalidity,\n                   last_seen_uidnext = excluded.last_seen_uidnext,\n                   updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "893a462cd20f7b532063f6ed05aec72e7ac1347f3d05833f4b8fa1d2e4d60090"
+}

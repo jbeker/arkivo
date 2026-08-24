@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select keywords from messages where mail_account_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "keywords",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "keywords"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "43f627c0348cb0b9b961e841210c25a7b8966806804218d1c02e02893cf63cf0"
+}

@@ -6,6 +6,7 @@ pub mod db;
 pub mod embed;
 pub mod extract;
 pub mod gmail;
+pub mod imap;
 pub mod ingest;
 pub mod jmap;
 pub mod maildir;

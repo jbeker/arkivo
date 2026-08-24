@@ -1,5 +1,5 @@
 //! Shared setup for the batch subcommands: account, unsealed
-//! credential, source client (JMAP or Gmail, per the account's
+//! credential, source client (JMAP, Gmail, or IMAP, per the account's
 //! provider), and the per-account Maildir. The caller's pool is
 //! borrowed, never duplicated — web-spawned jobs would exhaust
 //! Postgres connections otherwise.
@@ -11,18 +11,21 @@ use crate::config::{AppConfig, DeletionPolicy};
 use crate::crypto::Sealer;
 use crate::db::accounts::MailAccount;
 use crate::gmail::GmailClient;
+use crate::imap::{ImapClient, TlsMode};
 use crate::jmap::{JmapClient, RetryPolicy};
 use crate::maildir::Maildir;
 
 pub const SEAL_KEY_ID: &str = "primary";
 
-/// The account's mail source. Enum, not a trait: the two sync models are
-/// structurally different (opaque state strings + separate blob download
-/// vs. monotonic history ids + format=raw), so job execution matches on
-/// the variant and calls the matching engine.
+/// The account's mail source. Enum, not a trait: the three sync models
+/// are structurally different (opaque state strings + separate blob
+/// download vs. monotonic history ids + format=raw vs. per-folder UID
+/// diffing over a placement map), so job execution matches on the
+/// variant and calls the matching engine.
 pub enum SourceClient {
     Jmap(JmapClient),
     Gmail(GmailClient),
+    Imap(ImapClient),
 }
 
 pub struct AccountContext {
@@ -46,7 +49,8 @@ impl AccountContext {
                 sealer.key_id()
             );
         }
-        // JMAP bearer token or Gmail refresh token, per provider.
+        // JMAP bearer token, Gmail refresh token, or IMAP password, per
+        // provider.
         let token = String::from_utf8(sealer.unseal(&account.sealed_token)?)
             .context("unsealed token is not valid UTF-8")?;
 
@@ -62,6 +66,29 @@ impl AccountContext {
                 // Fail fast on a bad grant, like the JMAP session fetch does.
                 client.access_token().await?;
                 SourceClient::Gmail(client)
+            }
+            "imap" => {
+                let host = account
+                    .imap_host
+                    .as_deref()
+                    .with_context(|| format!("imap account {} has no host", account.id))?;
+                let port = account
+                    .imap_port
+                    .with_context(|| format!("imap account {} has no port", account.id))?;
+                let tls: TlsMode = account
+                    .imap_tls
+                    .as_deref()
+                    .unwrap_or("implicit")
+                    .parse()?;
+                let username = account
+                    .account_id
+                    .as_deref()
+                    .with_context(|| format!("imap account {} has no username", account.id))?;
+                // connect() performs LOGIN — the fail-fast credential
+                // check, like the JMAP session fetch.
+                SourceClient::Imap(
+                    ImapClient::connect(host, port as u16, tls, username, &token).await?,
+                )
             }
             _ => {
                 let session_url = account

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update imap_state\n           set backfill_done = true, backfill_cursor = null, updated_at = now()\n           where mail_account_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "12737bc72f7d4a2cea1df66ca482cdcf209673eb859b61fe743419c4ffacfa7a"
+}

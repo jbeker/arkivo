@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update messages set mailbox_ids = $2, keywords = $3 where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Jsonb",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0a3e81f8184eeb090644325a9554a3b465cf07139e31b8acd2acfc3d7e90ea30"
+}

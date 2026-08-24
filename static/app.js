@@ -289,6 +289,8 @@ function accountPanel(a, running) {
 
   const label = a.provider === "gmail"
     ? `${esc(a.email || "Gmail")} · Gmail`
+    : a.provider === "imap"
+    ? `${esc(a.email || "IMAP")} · IMAP`
     : accountLabel(a.jmap_session_url);
   const header = `<div class="actions">
     <strong>${label}</strong>
@@ -605,6 +607,22 @@ async function addAccount() {
       token: document.getElementById("acct-token").value,
     });
     document.getElementById("acct-token").value = "";
+    msg("acct-msg", "account added — click “Import mail” to download it, then “Index for search” to make it searchable", true);
+    refreshStatus();
+  } catch (e) { msg("acct-msg", e.message, false); }
+}
+
+async function addImapAccount() {
+  const port = document.getElementById("imap-port").value.trim();
+  try {
+    await api("/api/accounts/imap", {
+      host: document.getElementById("imap-host").value.trim(),
+      port: port ? Number(port) : null,
+      username: document.getElementById("imap-username").value.trim(),
+      password: document.getElementById("imap-password").value,
+      tls: document.getElementById("imap-tls").value,
+    });
+    document.getElementById("imap-password").value = "";
     msg("acct-msg", "account added — click “Import mail” to download it, then “Index for search” to make it searchable", true);
     refreshStatus();
   } catch (e) { msg("acct-msg", e.message, false); }

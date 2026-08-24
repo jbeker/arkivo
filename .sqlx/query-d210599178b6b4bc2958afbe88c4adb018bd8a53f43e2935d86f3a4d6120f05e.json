@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select mailbox_ids from messages where mail_account_id = $1 and subject = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "mailbox_ids",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "mailbox_ids"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d210599178b6b4bc2958afbe88c4adb018bd8a53f43e2935d86f3a4d6120f05e"
+}

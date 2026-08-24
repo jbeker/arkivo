@@ -184,6 +184,28 @@ async fn execute(
                     .await?;
                     (stats, retried)
                 }
+                SourceClient::Imap(client) => {
+                    let stats = crate::imap::backfill::backfill_account(
+                        pool,
+                        client,
+                        &ctx.maildir,
+                        &ctx.account,
+                        &options,
+                        Some(job_id),
+                    )
+                    .await?;
+                    if stats.cancelled {
+                        return Ok(Outcome::Cancelled(serde_json::to_value(&stats)?));
+                    }
+                    let retried = crate::imap::sync::fetch_missing_blobs(
+                        pool,
+                        client,
+                        &ctx.maildir,
+                        &ctx.account,
+                    )
+                    .await?;
+                    (stats, retried)
+                }
             };
             let mut value = serde_json::to_value(&stats)?;
             value["retried_blobs"] = json!(retried);
@@ -206,6 +228,17 @@ async fn execute(
                 }
                 SourceClient::Gmail(client) => {
                     crate::gmail::sync::poll_account(
+                        pool,
+                        client,
+                        &ctx.maildir,
+                        Some(&search),
+                        &ctx.account,
+                        ctx.deletion_policy(),
+                    )
+                    .await?
+                }
+                SourceClient::Imap(client) => {
+                    crate::imap::sync::poll_account(
                         pool,
                         client,
                         &ctx.maildir,

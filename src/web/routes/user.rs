@@ -19,6 +19,7 @@ pub fn router() -> Router<WebState> {
     Router::new()
         .route("/api/status", get(status))
         .route("/api/accounts", post(add_account))
+        .route("/api/accounts/imap", post(add_imap_account))
         .route(
             "/api/accounts/{id}",
             delete(remove_account).patch(update_account),
@@ -89,24 +90,37 @@ async fn status(
             .await
             .unwrap_or_default();
         // Per-provider sync state, presented uniformly.
-        let (backfill_done, last_state_update) = if account.provider == "gmail" {
-            let row = accounts::get_gmail_state(&state.pool, account.id)
-                .await
-                .ok()
-                .flatten();
-            (
-                row.as_ref().map(|s| s.backfill_done),
-                row.as_ref().map(|s| s.updated_at),
-            )
-        } else {
-            let row = accounts::get_jmap_state(&state.pool, account.id)
-                .await
-                .ok()
-                .flatten();
-            (
-                row.as_ref().map(|s| s.backfill_done),
-                row.as_ref().map(|s| s.updated_at),
-            )
+        let (backfill_done, last_state_update) = match account.provider.as_str() {
+            "gmail" => {
+                let row = accounts::get_gmail_state(&state.pool, account.id)
+                    .await
+                    .ok()
+                    .flatten();
+                (
+                    row.as_ref().map(|s| s.backfill_done),
+                    row.as_ref().map(|s| s.updated_at),
+                )
+            }
+            "imap" => {
+                let row = accounts::get_imap_state(&state.pool, account.id)
+                    .await
+                    .ok()
+                    .flatten();
+                (
+                    row.as_ref().map(|s| s.backfill_done),
+                    row.as_ref().map(|s| s.updated_at),
+                )
+            }
+            _ => {
+                let row = accounts::get_jmap_state(&state.pool, account.id)
+                    .await
+                    .ok()
+                    .flatten();
+                (
+                    row.as_ref().map(|s| s.backfill_done),
+                    row.as_ref().map(|s| s.updated_at),
+                )
+            }
         };
         let recent_jobs = jobs::recent(&state.pool, account.id, 8)
             .await
@@ -471,6 +485,72 @@ async fn add_account(
                 accounts::set_jmap_account_id(&state.pool, account.id, client.account_id()).await;
             (StatusCode::CREATED, Json(json!({"id": account.id}))).into_response()
         }
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct AddImapAccount {
+    host: String,
+    port: Option<u16>,
+    username: String,
+    /// Password or app password; sealed before storage, never echoed.
+    password: String,
+    /// "implicit" (default), "starttls", or "none".
+    tls: Option<String>,
+}
+
+async fn add_imap_account(
+    State(state): State<WebState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Json(body): Json<AddImapAccount>,
+) -> Response {
+    if body.host.trim().is_empty() || body.username.trim().is_empty() || body.password.is_empty() {
+        return (StatusCode::BAD_REQUEST, "host, username, and password are required")
+            .into_response();
+    }
+    let tls: crate::imap::TlsMode = match body.tls.as_deref().unwrap_or("implicit").parse() {
+        Ok(tls) => tls,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, "tls: implicit|starttls|none").into_response();
+        }
+    };
+    let host = body.host.trim();
+    let port = body.port.unwrap_or_else(|| tls.default_port());
+
+    // Validate the credential against the server before sealing: a bad
+    // password should fail here with a clear message, not at first poll.
+    match crate::imap::ImapClient::connect(host, port, tls, &body.username, &body.password).await {
+        Ok(client) => {
+            let _ = client.logout().await;
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "imap account validation failed");
+            return (
+                StatusCode::BAD_REQUEST,
+                "could not connect: the server rejected the login or is unreachable",
+            )
+                .into_response();
+        }
+    }
+
+    let sealed = match state.sealer.seal(body.password.as_bytes()) {
+        Ok(sealed) => sealed,
+        Err(e) => return internal(e),
+    };
+    match accounts::create_imap(
+        &state.pool,
+        user.id,
+        &body.username,
+        host,
+        port as i32,
+        tls.as_str(),
+        &sealed,
+        state.sealer.key_id(),
+    )
+    .await
+    {
+        Ok(account) => (StatusCode::CREATED, Json(json!({"id": account.id}))).into_response(),
         Err(e) => internal(e),
     }
 }

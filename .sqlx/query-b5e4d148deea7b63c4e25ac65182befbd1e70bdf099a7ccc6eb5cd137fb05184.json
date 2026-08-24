@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, user_id, provider, jmap_session_url, account_id, sealed_token,\n                  seal_key_id, recency_cutoff_days, deletion_policy,\n                  poll_interval_secs, sanitize_policy, created_at, disabled_at\n           from mail_accounts where id = $1",
+  "query": "insert into mail_accounts (user_id, provider, account_id, sealed_token, seal_key_id)\n           values ($1, 'gmail', $2, $3, $4)\n           returning id, user_id, provider, jmap_session_url, account_id, sealed_token,\n                     seal_key_id, recency_cutoff_days, deletion_policy,\n                     poll_interval_secs, sanitize_policy, created_at, disabled_at,\n                     imap_host, imap_port, imap_tls",
   "describe": {
     "columns": [
       {
@@ -145,11 +145,47 @@
             "name": "disabled_at"
           }
         }
+      },
+      {
+        "ordinal": 13,
+        "name": "imap_host",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "imap_host"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "imap_port",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "imap_port"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "imap_tls",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "imap_tls"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
-        "Int8"
+        "Int8",
+        "Text",
+        "Bytea",
+        "Text"
       ]
     },
     "nullable": [
@@ -165,8 +201,11 @@
       true,
       true,
       false,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "59f9a3853c2015e2a0b931e05203e9119b5e1c7611ffe184ecaa858beec33dc8"
+  "hash": "b5e4d148deea7b63c4e25ac65182befbd1e70bdf099a7ccc6eb5cd137fb05184"
 }

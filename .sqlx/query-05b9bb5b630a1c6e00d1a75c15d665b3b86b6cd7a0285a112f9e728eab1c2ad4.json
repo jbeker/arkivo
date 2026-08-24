@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select folder, uidvalidity, last_seen_uidnext\n           from imap_folders where mail_account_id = $1 and folder = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "folder",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "imap_folders",
+            "name": "folder"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "uidvalidity",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "imap_folders",
+            "name": "uidvalidity"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "last_seen_uidnext",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "imap_folders",
+            "name": "last_seen_uidnext"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "05b9bb5b630a1c6e00d1a75c15d665b3b86b6cd7a0285a112f9e728eab1c2ad4"
+}

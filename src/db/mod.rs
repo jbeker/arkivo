@@ -5,6 +5,7 @@ use sqlx::postgres::PgPoolOptions;
 pub mod accounts;
 pub mod audit;
 pub mod auth;
+pub mod imap_map;
 pub mod jobs;
 pub mod locks;
 pub mod messages;

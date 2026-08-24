@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "insert into mail_accounts (user_id, jmap_session_url, sealed_token, seal_key_id)\n           values ($1, $2, $3, $4)\n           returning id, user_id, provider, jmap_session_url, account_id, sealed_token,\n                     seal_key_id, recency_cutoff_days, deletion_policy,\n                     poll_interval_secs, sanitize_policy, created_at, disabled_at",
+  "query": "insert into mail_accounts\n               (user_id, provider, account_id, imap_host, imap_port, imap_tls,\n                sealed_token, seal_key_id)\n           values ($1, 'imap', $2, $3, $4, $5, $6, $7)\n           returning id, user_id, provider, jmap_session_url, account_id, sealed_token,\n                     seal_key_id, recency_cutoff_days, deletion_policy,\n                     poll_interval_secs, sanitize_policy, created_at, disabled_at,\n                     imap_host, imap_port, imap_tls",
   "describe": {
     "columns": [
       {
@@ -145,11 +145,47 @@
             "name": "disabled_at"
           }
         }
+      },
+      {
+        "ordinal": 13,
+        "name": "imap_host",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "imap_host"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "imap_port",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "imap_port"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "imap_tls",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "imap_tls"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
         "Int8",
+        "Text",
+        "Text",
+        "Int4",
         "Text",
         "Bytea",
         "Text"
@@ -168,8 +204,11 @@
       true,
       true,
       false,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "cc5c04914fa76cca72eaa1a25b5940447f9bd5904f151bf3e5941b02fbadd9bc"
+  "hash": "624e2490bd1d22038b6055821d401df75b51a8e47644597515a886c7d64c44fe"
 }

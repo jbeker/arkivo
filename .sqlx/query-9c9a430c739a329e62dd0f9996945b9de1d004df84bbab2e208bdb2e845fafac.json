@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, user_id, provider, jmap_session_url, account_id, sealed_token,\n                  seal_key_id, recency_cutoff_days, deletion_policy,\n                  poll_interval_secs, sanitize_policy, created_at, disabled_at\n           from mail_accounts where user_id = $1 order by id",
+  "query": "insert into mail_accounts (user_id, jmap_session_url, sealed_token, seal_key_id)\n           values ($1, $2, $3, $4)\n           returning id, user_id, provider, jmap_session_url, account_id, sealed_token,\n                     seal_key_id, recency_cutoff_days, deletion_policy,\n                     poll_interval_secs, sanitize_policy, created_at, disabled_at,\n                     imap_host, imap_port, imap_tls",
   "describe": {
     "columns": [
       {
@@ -145,11 +145,47 @@
             "name": "disabled_at"
           }
         }
+      },
+      {
+        "ordinal": 13,
+        "name": "imap_host",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "imap_host"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "imap_port",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "imap_port"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "imap_tls",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "imap_tls"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
-        "Int8"
+        "Int8",
+        "Text",
+        "Bytea",
+        "Text"
       ]
     },
     "nullable": [
@@ -165,8 +201,11 @@
       true,
       true,
       false,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "c8b1583cab548a7216f43dbe210f6365d9cee99d6beb02be74fd7d564f0ff58d"
+  "hash": "9c9a430c739a329e62dd0f9996945b9de1d004df84bbab2e208bdb2e845fafac"
 }

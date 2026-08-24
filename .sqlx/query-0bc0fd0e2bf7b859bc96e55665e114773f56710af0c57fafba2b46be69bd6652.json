@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from imap_uid_map\n           where mail_account_id = $1 and folder = $2 and uid = $3\n           returning message_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "message_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "imap_uid_map",
+            "name": "message_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0bc0fd0e2bf7b859bc96e55665e114773f56710af0c57fafba2b46be69bd6652"
+}

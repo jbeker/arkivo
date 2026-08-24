@@ -80,6 +80,26 @@ pub async fn upsert_meta(pool: &PgPool, mail_account_id: i64, meta: &MessageMeta
     Ok(rec.id)
 }
 
+/// Refresh only the placement-derived fields. The IMAP engine recomputes
+/// mailbox_ids/keywords from imap_uid_map on every placement change; the
+/// other metadata (and all local pipeline state) is untouched.
+pub async fn set_placement_meta(
+    pool: &PgPool,
+    id: i64,
+    mailbox_ids: &serde_json::Value,
+    keywords: &serde_json::Value,
+) -> Result<()> {
+    sqlx::query!(
+        "update messages set mailbox_ids = $2, keywords = $3 where id = $1",
+        id,
+        mailbox_ids,
+        keywords,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Record that the raw blob is durably in the Maildir. Runs inside the
 /// caller's transaction so the ledger and the fsync'd file commit together.
 pub async fn set_stored(tx: &mut sqlx::PgConnection, id: i64, maildir_path: &str) -> Result<()> {

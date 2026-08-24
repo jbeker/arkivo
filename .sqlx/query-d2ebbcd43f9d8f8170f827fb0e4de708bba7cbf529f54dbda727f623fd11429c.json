@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select folder, uid, flags from imap_uid_map\n           where message_id = $1 order by folder, uid",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "folder",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "imap_uid_map",
+            "name": "folder"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "uid",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "imap_uid_map",
+            "name": "uid"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "flags",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "imap_uid_map",
+            "name": "flags"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d2ebbcd43f9d8f8170f827fb0e4de708bba7cbf529f54dbda727f623fd11429c"
+}

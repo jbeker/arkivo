@@ -33,6 +33,26 @@
     </div>
   </div>
   {% endif %}
+
+  <div class="card" style="margin-top: var(--space-md)">
+    <h3 style="margin-top:0">Add an IMAP account</h3>
+    <p class="hint">For Gmail, prefer “Connect a Gmail account” above — over IMAP every label
+      becomes a folder. Use an app password if your provider offers them.</p>
+    <div class="field-row">
+      <input id="imap-host" placeholder="imap.example.com" size="24">
+      <input id="imap-port" placeholder="993" size="6" inputmode="numeric">
+      <select id="imap-tls">
+        <option value="implicit">TLS (993)</option>
+        <option value="starttls">STARTTLS (143)</option>
+        <option value="none">no TLS</option>
+      </select>
+    </div>
+    <div class="field-row">
+      <input id="imap-username" placeholder="username" size="24" autocomplete="off">
+      <input id="imap-password" placeholder="password or app password" type="password" size="26">
+      <button class="btn btn-primary" onclick="addImapAccount()">Add account</button>
+    </div>
+  </div>
 </section>
 
 <section>

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "insert into mail_accounts (user_id, provider, account_id, sealed_token, seal_key_id)\n           values ($1, 'gmail', $2, $3, $4)\n           returning id, user_id, provider, jmap_session_url, account_id, sealed_token,\n                     seal_key_id, recency_cutoff_days, deletion_policy,\n                     poll_interval_secs, sanitize_policy, created_at, disabled_at",
+  "query": "select id, user_id, provider, jmap_session_url, account_id, sealed_token,\n                  seal_key_id, recency_cutoff_days, deletion_policy,\n                  poll_interval_secs, sanitize_policy, created_at, disabled_at,\n                  imap_host, imap_port, imap_tls\n           from mail_accounts where user_id = $1 order by id",
   "describe": {
     "columns": [
       {
@@ -145,14 +145,44 @@
             "name": "disabled_at"
           }
         }
+      },
+      {
+        "ordinal": 13,
+        "name": "imap_host",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "imap_host"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "imap_port",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "imap_port"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "imap_tls",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mail_accounts",
+            "name": "imap_tls"
+          }
+        }
       }
     ],
     "parameters": {
       "Left": [
-        "Int8",
-        "Text",
-        "Bytea",
-        "Text"
+        "Int8"
       ]
     },
     "nullable": [
@@ -168,8 +198,11 @@
       true,
       true,
       false,
+      true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "4ce7beff77e79d16263261a4efa8f68b1aeb1df5059818aa35764c748cfb8548"
+  "hash": "813fdbc359ee4f7e6ce549f4d5b687e320382d5d33c8c0f8e2c0a3627c67ae9f"
 }

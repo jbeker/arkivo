@@ -6,11 +6,12 @@ use sqlx::PgPool;
 pub struct MailAccount {
     pub id: i64,
     pub user_id: i64,
-    /// "jmap" or "gmail".
+    /// "jmap", "gmail", or "imap".
     pub provider: String,
     /// Set for provider="jmap" only.
     pub jmap_session_url: Option<String>,
-    /// JMAP accountId, or the granted Gmail address for provider="gmail".
+    /// JMAP accountId, the granted Gmail address for provider="gmail", or
+    /// the login username for provider="imap".
     pub account_id: Option<String>,
     pub sealed_token: Vec<u8>,
     pub seal_key_id: String,
@@ -22,6 +23,11 @@ pub struct MailAccount {
     /// Set = paused: scheduled polling skips this account (manual jobs
     /// and scheduled promotion still run).
     pub disabled_at: Option<DateTime<Utc>>,
+    /// Set for provider="imap" only.
+    pub imap_host: Option<String>,
+    pub imap_port: Option<i32>,
+    /// "implicit", "starttls", or "none".
+    pub imap_tls: Option<String>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -30,6 +36,14 @@ pub struct JmapState {
     pub email_state: Option<String>,
     pub backfill_done: bool,
     pub backfill_anchor: Option<serde_json::Value>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ImapState {
+    pub mail_account_id: i64,
+    pub backfill_done: bool,
+    pub backfill_cursor: Option<serde_json::Value>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -65,7 +79,8 @@ pub async fn create(
            values ($1, $2, $3, $4)
            returning id, user_id, provider, jmap_session_url, account_id, sealed_token,
                      seal_key_id, recency_cutoff_days, deletion_policy,
-                     poll_interval_secs, sanitize_policy, created_at, disabled_at"#,
+                     poll_interval_secs, sanitize_policy, created_at, disabled_at,
+                     imap_host, imap_port, imap_tls"#,
         user_id,
         jmap_session_url,
         sealed_token,
@@ -87,7 +102,8 @@ pub async fn get(pool: &PgPool, id: i64) -> Result<Option<MailAccount>> {
     let account = account_query!(
         r#"select id, user_id, provider, jmap_session_url, account_id, sealed_token,
                   seal_key_id, recency_cutoff_days, deletion_policy,
-                  poll_interval_secs, sanitize_policy, created_at, disabled_at
+                  poll_interval_secs, sanitize_policy, created_at, disabled_at,
+                  imap_host, imap_port, imap_tls
            from mail_accounts where id = $1"#,
         id
     )
@@ -100,7 +116,8 @@ pub async fn list_for_user(pool: &PgPool, user_id: i64) -> Result<Vec<MailAccoun
     let accounts = account_query!(
         r#"select id, user_id, provider, jmap_session_url, account_id, sealed_token,
                   seal_key_id, recency_cutoff_days, deletion_policy,
-                  poll_interval_secs, sanitize_policy, created_at, disabled_at
+                  poll_interval_secs, sanitize_policy, created_at, disabled_at,
+                  imap_host, imap_port, imap_tls
            from mail_accounts where user_id = $1 order by id"#,
         user_id
     )
@@ -209,7 +226,8 @@ pub async fn create_gmail(
            values ($1, 'gmail', $2, $3, $4)
            returning id, user_id, provider, jmap_session_url, account_id, sealed_token,
                      seal_key_id, recency_cutoff_days, deletion_policy,
-                     poll_interval_secs, sanitize_policy, created_at, disabled_at"#,
+                     poll_interval_secs, sanitize_policy, created_at, disabled_at,
+                     imap_host, imap_port, imap_tls"#,
         user_id,
         email,
         sealed_refresh_token,
@@ -273,6 +291,89 @@ pub async fn set_gmail_backfill_cursor(
 pub async fn set_gmail_backfill_done(pool: &PgPool, mail_account_id: i64) -> Result<()> {
     sqlx::query!(
         r#"update gmail_state
+           set backfill_done = true, backfill_cursor = null, updated_at = now()
+           where mail_account_id = $1"#,
+        mail_account_id,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn create_imap(
+    pool: &PgPool,
+    user_id: i64,
+    username: &str,
+    host: &str,
+    port: i32,
+    tls: &str,
+    sealed_password: &[u8],
+    seal_key_id: &str,
+) -> Result<MailAccount> {
+    let mut tx = pool.begin().await?;
+    let account = account_query!(
+        r#"insert into mail_accounts
+               (user_id, provider, account_id, imap_host, imap_port, imap_tls,
+                sealed_token, seal_key_id)
+           values ($1, 'imap', $2, $3, $4, $5, $6, $7)
+           returning id, user_id, provider, jmap_session_url, account_id, sealed_token,
+                     seal_key_id, recency_cutoff_days, deletion_policy,
+                     poll_interval_secs, sanitize_policy, created_at, disabled_at,
+                     imap_host, imap_port, imap_tls"#,
+        user_id,
+        username,
+        host,
+        port,
+        tls,
+        sealed_password,
+        seal_key_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "insert into imap_state (mail_account_id) values ($1)",
+        account.id,
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(account)
+}
+
+pub async fn get_imap_state(pool: &PgPool, mail_account_id: i64) -> Result<Option<ImapState>> {
+    let state = sqlx::query_as!(
+        ImapState,
+        r#"select mail_account_id, backfill_done, backfill_cursor, updated_at
+           from imap_state where mail_account_id = $1"#,
+        mail_account_id,
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(state)
+}
+
+/// Persist the resumable backfill cursor. Callers must only invoke this
+/// after the corresponding page is durably written (spec §7.3).
+pub async fn set_imap_backfill_cursor(
+    pool: &PgPool,
+    mail_account_id: i64,
+    cursor: Option<&serde_json::Value>,
+) -> Result<()> {
+    sqlx::query!(
+        r#"update imap_state set backfill_cursor = $2, updated_at = now()
+           where mail_account_id = $1"#,
+        mail_account_id,
+        cursor,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn set_imap_backfill_done(pool: &PgPool, mail_account_id: i64) -> Result<()> {
+    sqlx::query!(
+        r#"update imap_state
            set backfill_done = true, backfill_cursor = null, updated_at = now()
            where mail_account_id = $1"#,
         mail_account_id,

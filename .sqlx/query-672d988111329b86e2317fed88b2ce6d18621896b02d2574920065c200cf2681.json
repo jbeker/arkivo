@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select mail_account_id, backfill_done, backfill_cursor, updated_at\n           from imap_state where mail_account_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "mail_account_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "imap_state",
+            "name": "mail_account_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "backfill_done",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "imap_state",
+            "name": "backfill_done"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "backfill_cursor",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "imap_state",
+            "name": "backfill_cursor"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "imap_state",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "672d988111329b86e2317fed88b2ce6d18621896b02d2574920065c200cf2681"
+}
