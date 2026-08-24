@@ -342,26 +342,91 @@ async fn uidvalidity_bump_resyncs_without_duplicates(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
-async fn flag_change_maps_to_keywords(pool: PgPool) {
+async fn flag_change_maps_to_keywords_once_folder_changes(pool: PgPool) {
     let h = harness(&pool).await;
     let uid = h
         .fake
         .add_message("INBOX", "flagged later", "a@example.com", ts(1), &[]);
     run_backfill(&pool, &h, &BackfillOptions::default()).await;
 
-    h.fake.set_flags("INBOX", uid, &["\\Seen", "\\Flagged"]);
-    let stats = run_poll(&pool, &h, DeletionPolicy::Mirror).await;
-    assert!(stats.updated >= 1);
+    let keywords_of = |subject: &str| {
+        let pool = pool.clone();
+        let account_id = h.account.id;
+        let subject = subject.to_string();
+        async move {
+            sqlx::query!(
+                "select keywords from messages where mail_account_id = $1 and subject = $2",
+                account_id,
+                subject,
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .keywords
+        }
+    };
 
-    let row = sqlx::query!(
-        "select keywords from messages where mail_account_id = $1",
-        h.account.id,
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(row.keywords["$seen"], serde_json::json!(true));
-    assert_eq!(row.keywords["$flagged"], serde_json::json!(true));
+    // A flag flip alone doesn't change folder membership, so the
+    // unchanged-folder skip leaves it stale — the accepted tradeoff.
+    h.fake.set_flags("INBOX", uid, &["\\Seen", "\\Flagged"]);
+    run_poll(&pool, &h, DeletionPolicy::Mirror).await;
+    let kw = keywords_of("flagged later").await;
+    assert!(kw.get("$seen").is_none(), "quiet folder: flags stay stale");
+
+    // Any membership change dirties the folder and the sweep picks the
+    // flags up.
+    h.fake
+        .add_message("INBOX", "newer", "a@example.com", ts(2), &[]);
+    let stats = run_poll(&pool, &h, DeletionPolicy::Mirror).await;
+    assert_eq!(stats.fetched, 1);
+    assert!(stats.updated >= 1);
+    let kw = keywords_of("flagged later").await;
+    assert_eq!(kw["$seen"], serde_json::json!(true));
+    assert_eq!(kw["$flagged"], serde_json::json!(true));
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn unchanged_folders_skip_uid_sweep(pool: PgPool) {
+    let h = harness(&pool).await;
+    h.fake.add_folder("Archive", None);
+    h.fake
+        .add_message("INBOX", "one", "a@example.com", ts(1), &[]);
+    h.fake
+        .add_message("Archive", "two", "a@example.com", ts(2), &[]);
+    run_backfill(&pool, &h, &BackfillOptions::default()).await;
+    let sweeps_after_backfill = h.fake.uid_sweep_count();
+
+    // Nothing changed: no folder is swept.
+    let stats = run_poll(&pool, &h, DeletionPolicy::Mirror).await;
+    assert_eq!(h.fake.uid_sweep_count(), sweeps_after_backfill);
+    assert_eq!(stats.fetched, 0);
+    assert_eq!(stats.updated, 0);
+    assert_eq!(stats.destroyed, 0);
+
+    // One new message in INBOX: exactly that folder is swept.
+    h.fake
+        .add_message("INBOX", "three", "a@example.com", ts(3), &[]);
+    let stats = run_poll(&pool, &h, DeletionPolicy::Mirror).await;
+    assert_eq!(h.fake.uid_sweep_count(), sweeps_after_backfill + 1);
+    assert_eq!(stats.fetched, 1);
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn skip_does_not_miss_deletions(pool: PgPool) {
+    // A delete leaves UIDNEXT untouched; only the EXISTS-vs-placements
+    // comparison catches it. Guards against skipping on UIDNEXT alone.
+    let h = harness(&pool).await;
+    let uid = h
+        .fake
+        .add_message("INBOX", "doomed", "a@example.com", ts(1), &[]);
+    h.fake
+        .add_message("INBOX", "stays", "a@example.com", ts(2), &[]);
+    run_backfill(&pool, &h, &BackfillOptions::default()).await;
+
+    h.fake.delete_message("INBOX", uid);
+    let stats = run_poll(&pool, &h, DeletionPolicy::Mirror).await;
+    assert_eq!(stats.destroyed, 1);
+    assert_eq!(row_count(&pool, h.account.id).await, 1);
 }
 
 #[sqlx::test(migrator = "arkivo::db::MIGRATOR")]

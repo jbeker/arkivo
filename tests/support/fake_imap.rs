@@ -46,6 +46,9 @@ struct Inner {
     /// Count of full-body (BODY.PEEK[]) fetches — the "did we
     /// re-download" probe.
     body_fetches: u64,
+    /// Count of full-folder membership sweeps (`UID FETCH 1:*` for
+    /// UID/FLAGS only) — the "did we skip the unchanged folder" probe.
+    uid_sweeps: u64,
     msgid_seq: u64,
 }
 
@@ -61,6 +64,7 @@ impl FakeImap {
         let inner = Arc::new(Mutex::new(Inner {
             folders,
             body_fetches: 0,
+            uid_sweeps: 0,
             msgid_seq: 0,
         }));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -224,6 +228,10 @@ impl FakeImap {
         self.inner.lock().unwrap().body_fetches
     }
 
+    pub fn uid_sweep_count(&self) -> u64 {
+        self.inner.lock().unwrap().uid_sweeps
+    }
+
     pub fn uids(&self, folder: &str) -> Vec<u32> {
         let inner = self.inner.lock().unwrap();
         inner.folders[folder].messages.keys().copied().collect()
@@ -330,6 +338,9 @@ async fn serve_connection(socket: TcpStream, inner: Arc<Mutex<Inner>>) -> std::i
                     let body_fetch = items.contains("BODY.PEEK[]");
                     if body_fetch {
                         inner.body_fetches += responses.len() as u64;
+                    }
+                    if tokens[0] == "1:*" && items.contains("FLAGS") && !items.contains("BODY") {
+                        inner.uid_sweeps += 1;
                     }
                     drop(inner);
                     for r in responses {

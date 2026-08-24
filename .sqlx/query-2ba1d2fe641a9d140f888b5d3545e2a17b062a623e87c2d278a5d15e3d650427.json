@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select keywords from messages where mail_account_id = $1",
+  "query": "select keywords from messages where mail_account_id = $1 and subject = $2",
   "describe": {
     "columns": [
       {
@@ -17,12 +17,13 @@
     ],
     "parameters": {
       "Left": [
-        "Int8"
+        "Int8",
+        "Text"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "43f627c0348cb0b9b961e841210c25a7b8966806804218d1c02e02893cf63cf0"
+  "hash": "2ba1d2fe641a9d140f888b5d3545e2a17b062a623e87c2d278a5d15e3d650427"
 }

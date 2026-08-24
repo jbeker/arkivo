@@ -11,7 +11,12 @@
 //! row by Message-ID header without re-downloading the body — and a row
 //! is destroyed (per deletion policy) only when its last placement
 //! vanishes. Every poll walks all selectable folders except Trash/Junk,
-//! so mail filed anywhere between polls is picked up.
+//! so mail filed anywhere between polls is picked up — but a folder
+//! whose EXAMINE proves it unchanged (same UIDVALIDITY, same UIDNEXT,
+//! EXISTS matching our placement count) skips its O(folder) UID sweep.
+//! Accepted tradeoff: flag-only changes in such a folder stay stale
+//! until the folder next gains or loses a message (CONDSTORE is the
+//! future exact upgrade).
 
 use std::collections::{HashMap, HashSet};
 
@@ -289,6 +294,24 @@ pub async fn poll_account(
                 pool, client, store, search, account, &info.name, status, policy, &mut stats,
             )
             .await?;
+            continue;
+        }
+
+        // Provably unchanged folder: same UIDVALIDITY epoch, no additions
+        // (any add bumps UIDNEXT), and no removals (with no additions an
+        // expunge strictly shrinks EXISTS, which still matches our
+        // placement count). Skip the O(folder) sweep. Flag-only changes
+        // here stay stale until the folder next changes — accepted.
+        if let Some(prev) = &prev
+            && prev.uidvalidity == status.uidvalidity as i64
+            && prev.last_seen_uidnext == status.uidnext as i64
+            && imap_map::count_uids(pool, account.id, &info.name).await? == status.exists as i64
+        {
+            tracing::debug!(
+                account = account.id,
+                folder = %info.name,
+                "unchanged; skipping UID sweep"
+            );
             continue;
         }
 

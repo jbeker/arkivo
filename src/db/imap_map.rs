@@ -214,3 +214,17 @@ pub async fn find_by_message_id_hdr(
     .await?;
     Ok(rows.into_iter().map(|r| r.id).collect())
 }
+
+/// Number of placements recorded for a folder — compared against EXISTS
+/// to prove a folder unchanged without loading the full map.
+pub async fn count_uids(pool: &PgPool, mail_account_id: i64, folder: &str) -> Result<i64> {
+    let rec = sqlx::query!(
+        r#"select count(*) as "count!" from imap_uid_map
+           where mail_account_id = $1 and folder = $2"#,
+        mail_account_id,
+        folder,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(rec.count)
+}
