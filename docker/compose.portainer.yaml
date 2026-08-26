@@ -2,10 +2,13 @@
 #
 # Fill in via Portainer's "Environment variables" panel (or edit inline):
 #   POSTGRES_PASSWORD   database password (pick something long and random)
-#   ARKIVO_IMAGE        optional override; defaults to the registry image
-#                       registry.example.com/arkivo:latest. Pin a build
-#                       with a SHA tag (e.g. :959de55) for controlled rollouts.
-#                       Publish images with scripts/build-and-push.sh.
+#   ARKIVO_IMAGE        image to run, e.g. registry.example.com/arkivo:latest.
+#                       Pin a build with a SHA tag (e.g. :959de55) for
+#                       controlled rollouts. Publish images with
+#                       scripts/build-and-push.sh.
+#   OLLAMA_URL          embedding endpoint, e.g. http://host:11434
+#   RP_ID               public domain, e.g. arkivo.example.com
+#   RP_ORIGIN           public origin, e.g. https://arkivo.example.com
 #   MASTER_KEY_FILE     host path to the 32-byte hex master key, e.g. /opt/arkivo/master.key
 #                       create it once:  head -c 32 /dev/urandom | xxd -p -c 64 > /opt/arkivo/master.key
 #
@@ -18,7 +21,7 @@
 # If your proxy shares a Docker network with this stack, you can drop the
 # `ports:` sections and target arkivo-web:8080 / arkivo-mcp:8081 directly.
 #
-# First run: open https://arkivo.example.com — the UI offers one-time
+# First run: open the web UI at ${RP_ORIGIN} — it offers one-time
 # "create first admin" setup. Everything after (account, token, backfill)
 # happens in the browser.
 
@@ -59,7 +62,7 @@ services:
       retries: 20
 
   arkivo-web:
-    image: ${ARKIVO_IMAGE:-registry.example.com/arkivo:latest}
+    image: ${ARKIVO_IMAGE:?e.g. registry.example.com/arkivo:latest}
     restart: unless-stopped
     command: ["serve-web"]
     environment: &arkivo-env
@@ -67,19 +70,19 @@ services:
       ARKIVO_MAILDIR_ROOT: /data/mail
       ARKIVO_MASTER_KEY_PATH: /etc/arkivo/master.key
       ARKIVO_OPENSEARCH__URL: http://opensearch:9200
-      ARKIVO_EMBEDDING__URL: https://ollama.example.com
+      ARKIVO_EMBEDDING__URL: ${OLLAMA_URL:?e.g. http://host:11434}
       ARKIVO_WEB__BIND: 0.0.0.0:8080
       # WebAuthn is strict about these: they must match the public URL
       # the browser sees, exactly.
-      ARKIVO_WEB__RP_ID: arkivo.example.com
-      ARKIVO_WEB__RP_ORIGIN: https://arkivo.example.com
+      ARKIVO_WEB__RP_ID: ${RP_ID:?e.g. arkivo.example.com}
+      ARKIVO_WEB__RP_ORIGIN: ${RP_ORIGIN:?e.g. https://arkivo.example.com}
       ARKIVO_MCP__BIND: 0.0.0.0:8081
       # Host-header allowlist for the MCP service (requests arrive with
       # the public hostname via the proxy).
-      ARKIVO_MCP__ALLOWED_HOSTS: '["arkivo.example.com"]'
+      ARKIVO_MCP__ALLOWED_HOSTS: '["${RP_ID}"]'
       # Optional Gmail ingestion: an Internal OAuth client in the
       # Workspace's Google Cloud project, gmail.readonly scope, redirect
-      # URI https://arkivo.example.com/oauth/google/callback.
+      # URI ${RP_ORIGIN}/oauth/google/callback.
       # Leave unset to hide the "Connect Gmail" flow.
       ARKIVO_GOOGLE__CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       ARKIVO_GOOGLE__CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
@@ -95,7 +98,7 @@ services:
         condition: service_healthy
 
   arkivo-mcp:
-    image: ${ARKIVO_IMAGE:-registry.example.com/arkivo:latest}
+    image: ${ARKIVO_IMAGE:?e.g. registry.example.com/arkivo:latest}
     restart: unless-stopped
     command: ["serve-mcp"]
     # No master-key mount: serve-mcp never unseals credentials (spec §16 —
@@ -112,7 +115,7 @@ services:
   # Scheduled poll + promote (see docker/crontab in the image). Manual
   # runs are also available per account from the web dashboard.
   arkivo-worker:
-    image: ${ARKIVO_IMAGE:-registry.example.com/arkivo:latest}
+    image: ${ARKIVO_IMAGE:?e.g. registry.example.com/arkivo:latest}
     restart: unless-stopped
     entrypoint: ["/usr/local/bin/supercronic", "/etc/arkivo/crontab"]
     environment: *arkivo-env

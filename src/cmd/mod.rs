@@ -36,7 +36,7 @@ pub struct Cli {
 pub enum Command {
     /// Seed the archive: page through the full mailbox and download every message.
     Backfill(backfill::Args),
-    /// Incremental sync: apply Email/changes since the stored JMAP state.
+    /// Incremental sync: apply changes since the stored per-account sync state.
     Poll(poll::Args),
     /// Promote aged messages through sanitization into the search index.
     Promote(promote::Args),

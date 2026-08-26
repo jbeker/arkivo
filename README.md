@@ -1,8 +1,9 @@
 # Arkivo
 
 Email archive with recency-gated, agent-safe search. Arkivo ingests
-mail — a Fastmail account over JMAP, or a Gmail account via the Gmail
-API with OAuth — into a canonical Maildir store, promotes messages past
+mail — a Fastmail account over JMAP, a Gmail account via the Gmail API
+with OAuth, or any mailbox over IMAP — into a canonical Maildir store,
+promotes messages past
 a configurable **recency cutoff** through sanitization into OpenSearch
 (BM25 + semantic vectors), and exposes read-only hybrid search to AI
 agents via an MCP server.
@@ -20,7 +21,7 @@ scoped, and fully audit-logged.
 One binary, several subcommands:
 
 Everything is operable from the web interface: first-run admin setup,
-adding a Fastmail account (the token is validated live, then sealed),
+adding mail accounts (credentials are validated live, then sealed),
 starting/cancelling the initial backfill with progress, manual
 poll/promote/reindex, MCP tokens, and status. The CLI subcommands exist
 for automation (the worker container's cron uses them) and as a fallback:
@@ -29,7 +30,7 @@ for automation (the worker container's cron uses them) and as a fallback:
 |--------------|------|
 | `serve-web`  | Web administration UI (WebAuthn passkeys only) |
 | `serve-mcp`  | Read-only MCP search server (bearer tokens) |
-| `poll`       | Incremental sync, JMAP or Gmail per account (`--account N` or `--all`) — cron entry point |
+| `poll`       | Incremental sync, JMAP, Gmail, or IMAP per account (`--account N` or `--all`) — cron entry point |
 | `promote`    | Move aged messages through sanitization into the index — cron entry point |
 | `backfill`   | Seed the archive from the mail source (resumable; `--limit`, `--since`) |
 | `reindex`    | Rebuild the search index from the Maildir (`--recreate` for mapping changes) |
@@ -73,9 +74,10 @@ Everything else happens in the browser:
 1. Open the web UI — with no users yet, it offers **first-run setup**:
    create the first admin with a passkey (no invite needed; the flow
    closes permanently once a user exists).
-2. Add your Fastmail account (read-only API token), or press **Connect
-   Gmail** and approve read-only access at Google. Either credential is
-   validated live before it is sealed and stored.
+2. Add your mail account: a Fastmail read-only API token, **Connect
+   Gmail** with read-only access approved at Google, or an IMAP
+   host/username/password. Every credential is validated live,
+   then sealed and stored.
 3. Press **start backfill** — optionally with a message limit as a
    smoke test first. Progress is shown live; the job is cancellable and
    resumable (multi-hour for large mailboxes; interruptions are safe).
@@ -96,6 +98,31 @@ client_secret = "..."   # or ARKIVO_GOOGLE__CLIENT_SECRET
 The refresh token is sealed like the Fastmail token. Spam and Trash are
 never archived; deletions upstream follow the account's deletion policy.
 
+### IMAP
+
+Any other mailbox is archived over plain IMAP: add it in the dashboard
+with host, username, and password (use an app password where your
+provider offers one). The login is validated live, then sealed like the
+other credentials. The connection defaults to implicit TLS on port 993;
+the form also offers STARTTLS on 143. No config-file changes are
+needed, and the CLI subcommands work unchanged.
+
+IMAP has no stable message identity — UIDs are per-folder and a move
+renumbers the message — so Arkivo identifies each message by the
+SHA-256 of its raw bytes and tracks folder placements separately. A
+moved message is matched by Message-ID and re-homed, never downloaded
+twice; a message copied into several folders is one archived message
+with several placements, and the deletion policy applies only when the
+last placement disappears. A folder whose UIDVALIDITY, UIDNEXT, and
+message count are all unchanged is skipped entirely during a poll; the
+tradeoff is that flag-only changes (read, flagged) in a quiet folder
+wait for the folder's next addition or deletion. As with the other
+providers, Trash and Junk are never archived; other folders, including
+ones created later, are picked up automatically.
+
+For Gmail accounts, prefer **Connect Gmail**: over IMAP every label
+becomes a folder.
+
 The worker container polls and promotes on a schedule (`docker/crontab`);
 the same jobs can be triggered manually per account from the dashboard.
 Mint an MCP token in the dashboard and point your agent at
@@ -115,3 +142,7 @@ Mint an MCP token in the dashboard and point your agent at
   `audit_log` and visible in the dashboard.
 - **Key rotation**: sealed credentials carry a `seal_key_id`; introduce
   a new key file, re-add accounts (tokens re-seal on save).
+
+## License
+
+AGPL-3.0-or-later — see [LICENSE](LICENSE).

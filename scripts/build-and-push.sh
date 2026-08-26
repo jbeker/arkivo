@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the Arkivo image and push it to registry.example.com.
+# Build the Arkivo image and push it to the registry named by DOCKER_REGISTRY.
 #
 # Safety first: the script never commits or pushes git for you — it
 # REFUSES to build if there are uncommitted changes or unpushed
@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-REGISTRY="registry.example.com"
+REGISTRY="${DOCKER_REGISTRY:?set DOCKER_REGISTRY, e.g. registry.example.com}"
 IMAGE="${REGISTRY}/arkivo"
 
 cd "$(dirname "$0")/.."

@@ -3,7 +3,8 @@
 
 database_url = "postgres://arkivo:arkivo@localhost:5432/arkivo"
 maildir_root = "./data/mail"
-# 32 bytes, hex-encoded — seals Fastmail tokens at rest. Keep out of git.
+# 32 bytes, hex-encoded — seals mail credentials (Fastmail tokens, Gmail
+# refresh tokens, IMAP passwords) at rest. Keep out of git.
 master_key_path = "./data/master.key"
 
 [opensearch]

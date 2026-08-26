@@ -2,6 +2,9 @@
 name = "arkivo"
 version = "0.1.0"
 edition = "2024"
+description = "Email archive with recency-gated, agent-safe search"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/jbeker/arkivo"
 
 [dependencies]
 anyhow = "1.0.103"
