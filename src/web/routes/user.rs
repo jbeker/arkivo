@@ -56,6 +56,9 @@ fn not_found() -> Response {
 }
 
 /// Load an account only if the session user owns it.
+// Response as the Err type is the axum idiom; boxing it would cost every
+// `?` call site more than the 128-byte Err does on this cold error path.
+#[allow(clippy::result_large_err)]
 async fn owned_account(
     state: &WebState,
     user_id: i64,
