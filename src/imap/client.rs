@@ -314,16 +314,13 @@ impl ImapClient {
             .await?
             .try_collect()
             .await?;
-        Ok(fetches
-            .iter()
-            .find(|f| f.uid == Some(uid))
-            .and_then(|f| {
-                f.body().map(|body| RawMessage {
-                    raw: body.to_vec(),
-                    internal_date: f.internal_date().map(|d| d.with_timezone(&Utc)),
-                    flags: fetch_flags(f),
-                })
-            }))
+        Ok(fetches.iter().find(|f| f.uid == Some(uid)).and_then(|f| {
+            f.body().map(|body| RawMessage {
+                raw: body.to_vec(),
+                internal_date: f.internal_date().map(|d| d.with_timezone(&Utc)),
+                flags: fetch_flags(f),
+            })
+        }))
     }
 
     /// `UID SEARCH SINCE <date>` in the currently-examined folder, for

@@ -506,7 +506,10 @@ async fn add_imap_account(
     Json(body): Json<AddImapAccount>,
 ) -> Response {
     if body.host.trim().is_empty() || body.username.trim().is_empty() || body.password.is_empty() {
-        return (StatusCode::BAD_REQUEST, "host, username, and password are required")
+        return (
+            StatusCode::BAD_REQUEST,
+            "host, username, and password are required",
+        )
             .into_response();
     }
     let tls: crate::imap::TlsMode = match body.tls.as_deref().unwrap_or("implicit").parse() {

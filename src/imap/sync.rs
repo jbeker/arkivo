@@ -65,9 +65,9 @@ pub fn is_archivable(folder: &FolderInfo) -> bool {
     }
     const SKIP_NAMES: [&str; 5] = ["trash", "junk", "spam", "deleted messages", "deleted items"];
     let lower = folder.name.to_lowercase();
-    !SKIP_NAMES
-        .iter()
-        .any(|n| lower == *n || lower.ends_with(&format!("/{n}")) || lower.ends_with(&format!(".{n}")))
+    !SKIP_NAMES.iter().any(|n| {
+        lower == *n || lower.ends_with(&format!("/{n}")) || lower.ends_with(&format!(".{n}"))
+    })
 }
 
 pub fn content_id(raw: &[u8]) -> String {
@@ -154,7 +154,10 @@ pub async fn recompute_placement_meta(pool: &PgPool, message_id: i64) -> Result<
     let mut folders: Vec<&str> = placements.iter().map(|p| p.folder.as_str()).collect();
     folders.sort_unstable();
     folders.dedup();
-    let all_flags: Vec<String> = placements.iter().flat_map(|p| json_flags(&p.flags)).collect();
+    let all_flags: Vec<String> = placements
+        .iter()
+        .flat_map(|p| json_flags(&p.flags))
+        .collect();
     let keywords = flags_to_keywords(all_flags.iter().map(String::as_str));
     messages::set_placement_meta(pool, message_id, &serde_json::json!(folders), &keywords).await?;
     Ok(())
@@ -206,7 +209,8 @@ pub async fn ingest_uid(
         Err(e) => return Err(e).with_context(|| format!("fetching {folder} uid {uid}")),
     };
     let hash_id = content_id(&raw_msg.raw);
-    let row_id = messages::upsert_meta(pool, account.id, &meta_from_raw(&hash_id, &raw_msg)).await?;
+    let row_id =
+        messages::upsert_meta(pool, account.id, &meta_from_raw(&hash_id, &raw_msg)).await?;
     // Placement lands before the blob write: if the write fails, the row
     // stays `maildir_path IS NULL` with a live placement, exactly what
     // fetch_missing_blobs needs to retry it.
@@ -330,7 +334,14 @@ pub async fn poll_account(
             .collect();
         new_uids.sort_unstable();
         ingest_new_uids(
-            pool, client, store, account, &info.name, status.uidvalidity, &new_uids, &server,
+            pool,
+            client,
+            store,
+            account,
+            &info.name,
+            status.uidvalidity,
+            &new_uids,
+            &server,
             &mut stats,
         )
         .await?;
@@ -662,11 +673,7 @@ mod tests {
     fn archivable_folder_filtering() {
         assert!(is_archivable(&folder("INBOX", true, None)));
         assert!(is_archivable(&folder("Archive/2026", true, None)));
-        assert!(is_archivable(&folder(
-            "Sent",
-            true,
-            Some(SpecialUse::Sent)
-        )));
+        assert!(is_archivable(&folder("Sent", true, Some(SpecialUse::Sent))));
         assert!(!is_archivable(&folder("INBOX", false, None)));
         assert!(!is_archivable(&folder(
             "Rubbish",

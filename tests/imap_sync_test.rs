@@ -27,15 +27,9 @@ struct Harness {
 
 async fn harness(pool: &PgPool) -> Harness {
     let fake = FakeImap::start().await;
-    let client = ImapClient::connect(
-        &fake.host(),
-        fake.port(),
-        TlsMode::None,
-        USERNAME,
-        PASSWORD,
-    )
-    .await
-    .unwrap();
+    let client = ImapClient::connect(&fake.host(), fake.port(), TlsMode::None, USERNAME, PASSWORD)
+        .await
+        .unwrap();
     let user = users::create(pool, "alice", "user").await.unwrap();
     let account = accounts::create_imap(
         pool,
@@ -433,9 +427,9 @@ async fn skip_does_not_miss_deletions(pool: PgPool) {
 async fn missing_message_id_never_merges_but_hash_dedups(pool: PgPool) {
     let h = harness(&pool).await;
     h.fake.add_folder("Archive", None);
-    let uid1 = h
-        .fake
-        .add_message_with_msgid("INBOX", "anon one", "a@example.com", ts(1), &[], None);
+    let uid1 =
+        h.fake
+            .add_message_with_msgid("INBOX", "anon one", "a@example.com", ts(1), &[], None);
     h.fake
         .add_message_with_msgid("INBOX", "anon two", "a@example.com", ts(2), &[], None);
     run_backfill(&pool, &h, &BackfillOptions::default()).await;
@@ -614,7 +608,10 @@ async fn fetch_missing_blobs_prunes_vanished_rows(pool: PgPool) {
     .await
     .unwrap();
     assert_eq!(
-        messages::counts(&pool, h.account.id).await.unwrap().unfetched,
+        messages::counts(&pool, h.account.id)
+            .await
+            .unwrap()
+            .unfetched,
         1
     );
 

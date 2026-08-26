@@ -463,7 +463,11 @@ async fn failed_messages_list_and_retry_through_the_api(pool: PgPool) {
         .await;
     assert_eq!(status, 200);
     let groups = problems["groups"].as_array().unwrap();
-    assert_eq!(groups.len(), 1, "digit-normalized errors group as one: {problems}");
+    assert_eq!(
+        groups.len(),
+        1,
+        "digit-normalized errors group as one: {problems}"
+    );
     assert_eq!(groups[0]["count"], 2);
     assert_eq!(groups[0]["status"], "failed");
     let error_key = groups[0]["error_key"].as_str().unwrap().to_string();
@@ -523,11 +527,12 @@ async fn failed_messages_list_and_retry_through_the_api(pool: PgPool) {
     assert!(problems["groups"].as_array().unwrap().is_empty());
 
     // A healthy (indexed) message refuses a per-message retry.
-    let msg_id: i64 = sqlx::query_scalar("select id from messages where mail_account_id = $1 limit 1")
-        .bind(h.account_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let msg_id: i64 =
+        sqlx::query_scalar("select id from messages where mail_account_id = $1 limit 1")
+            .bind(h.account_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     let (status, _) = h
         .api(
             reqwest::Method::POST,

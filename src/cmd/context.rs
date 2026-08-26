@@ -75,11 +75,7 @@ impl AccountContext {
                 let port = account
                     .imap_port
                     .with_context(|| format!("imap account {} has no port", account.id))?;
-                let tls: TlsMode = account
-                    .imap_tls
-                    .as_deref()
-                    .unwrap_or("implicit")
-                    .parse()?;
+                let tls: TlsMode = account.imap_tls.as_deref().unwrap_or("implicit").parse()?;
                 let username = account
                     .account_id
                     .as_deref()

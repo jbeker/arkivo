@@ -47,7 +47,10 @@ impl Cursor {
                 .get("folder_index")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as usize,
-            uidvalidity: value.get("uidvalidity").and_then(|v| v.as_i64()).unwrap_or(0),
+            uidvalidity: value
+                .get("uidvalidity")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0),
             last_uid: value.get("last_uid").and_then(|v| v.as_i64()).unwrap_or(0),
         }
     }
@@ -138,13 +141,7 @@ pub async fn backfill_account(
             .map(|e| (e.uid as i64, e.flags.clone()))
             .collect();
         let since_set: Option<HashSet<u32>> = match options.since {
-            Some(since) => Some(
-                client
-                    .uid_search_since(since)
-                    .await?
-                    .into_iter()
-                    .collect(),
-            ),
+            Some(since) => Some(client.uid_search_since(since).await?.into_iter().collect()),
             None => None,
         };
         let mut uids: Vec<i64> = entries

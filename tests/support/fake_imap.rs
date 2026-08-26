@@ -316,9 +316,7 @@ async fn serve_connection(socket: TcpStream, inner: Arc<Mutex<Inner>>) -> std::i
                     }
                     None => {
                         drop(inner);
-                        out.extend_from_slice(
-                            format!("{tag} NO no such mailbox\r\n").as_bytes(),
-                        );
+                        out.extend_from_slice(format!("{tag} NO no such mailbox\r\n").as_bytes());
                     }
                 }
             }
@@ -451,7 +449,11 @@ fn tokenize(rest: &str) -> Vec<String> {
 fn parse_uid_set(set: &str, folder: &Folder) -> Vec<u32> {
     let max = folder.messages.keys().max().copied().unwrap_or(0);
     let resolve = |s: &str| -> u32 {
-        if s == "*" { max } else { s.parse().unwrap_or(0) }
+        if s == "*" {
+            max
+        } else {
+            s.parse().unwrap_or(0)
+        }
     };
     let mut uids = Vec::new();
     for part in set.split(',') {

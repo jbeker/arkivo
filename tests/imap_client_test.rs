@@ -84,8 +84,15 @@ async fn header_peek_and_raw_fetch() {
     assert!(String::from_utf8_lossy(&raw.raw).contains("Subject: with id"));
     assert_eq!(raw.internal_date.unwrap(), date);
 
-    assert!(client.fetch_raw(999).await.unwrap().is_none(), "vanished uid");
-    assert_eq!(fake.body_fetch_count(), 1, "header peek is not a body fetch");
+    assert!(
+        client.fetch_raw(999).await.unwrap().is_none(),
+        "vanished uid"
+    );
+    assert_eq!(
+        fake.body_fetch_count(),
+        1,
+        "header peek is not a body fetch"
+    );
 }
 
 #[tokio::test]

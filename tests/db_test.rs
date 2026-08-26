@@ -359,7 +359,14 @@ async fn disabled_account_is_skipped_by_scheduled_resolution(pool: PgPool) {
 async fn problem_fixture(pool: &PgPool) -> (accounts::MailAccount, Vec<i64>) {
     let account = account_fixture(pool).await;
     let mut ids = Vec::new();
-    for (name, days) in [("p1", 40), ("p2", 39), ("p3", 38), ("p4", 37), ("p5", 36), ("ok", 35)] {
+    for (name, days) in [
+        ("p1", 40),
+        ("p2", 39),
+        ("p3", 38),
+        ("p4", 37),
+        ("p5", 36),
+        ("ok", 35),
+    ] {
         ids.push(
             messages::upsert_meta(pool, account.id, &meta(name, days))
                 .await
@@ -377,12 +384,22 @@ async fn problem_fixture(pool: &PgPool) -> (accounts::MailAccount, Vec<i64>) {
     }
     drop(conn);
 
-    messages::mark_status(pool, ids[0], "failed", Some("OpenSearch /msg/_doc/123 returned 429"))
-        .await
-        .unwrap();
-    messages::mark_status(pool, ids[1], "failed", Some("OpenSearch /msg/_doc/456 returned 429"))
-        .await
-        .unwrap();
+    messages::mark_status(
+        pool,
+        ids[0],
+        "failed",
+        Some("OpenSearch /msg/_doc/123 returned 429"),
+    )
+    .await
+    .unwrap();
+    messages::mark_status(
+        pool,
+        ids[1],
+        "failed",
+        Some("OpenSearch /msg/_doc/456 returned 429"),
+    )
+    .await
+    .unwrap();
     messages::mark_status(pool, ids[2], "failed", Some("embedding request failed"))
         .await
         .unwrap();
@@ -410,11 +427,13 @@ async fn problem_groups_collapse_by_normalized_error(pool: PgPool) {
         .expect("digit-normalized 429 group");
     assert_eq!(opensearch.count, 2);
     assert_eq!(opensearch.index_status, "failed");
-    assert!(opensearch
-        .sample_error
-        .as_deref()
-        .unwrap()
-        .starts_with("OpenSearch /msg/_doc/"));
+    assert!(
+        opensearch
+            .sample_error
+            .as_deref()
+            .unwrap()
+            .starts_with("OpenSearch /msg/_doc/")
+    );
 
     let embedding = groups
         .iter()
@@ -427,7 +446,10 @@ async fn problem_groups_collapse_by_normalized_error(pool: PgPool) {
         .find(|g| g.index_status == "quarantined")
         .unwrap();
     assert_eq!(quarantine.count, 1);
-    assert_eq!(quarantine.sample_error.as_deref(), Some("sanitize: blocked html"));
+    assert_eq!(
+        quarantine.sample_error.as_deref(),
+        Some("sanitize: blocked html")
+    );
 }
 
 #[sqlx::test(migrator = "db::MIGRATOR")]
@@ -439,7 +461,11 @@ async fn problem_messages_filter_by_status_and_group(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(failed.len(), 4);
-    assert!(failed.windows(2).all(|w| w[0].received_at >= w[1].received_at));
+    assert!(
+        failed
+            .windows(2)
+            .all(|w| w[0].received_at >= w[1].received_at)
+    );
 
     // Scoped to one normalized group.
     let scoped = messages::problem_messages(
@@ -455,9 +481,15 @@ async fn problem_messages_filter_by_status_and_group(pool: PgPool) {
     assert!(scoped.iter().all(|m| m.retryable));
 
     // The blob-less failure reports retryable = false.
-    let embedding = messages::problem_messages(&pool, account.id, "failed", Some("embedding request failed"), 50)
-        .await
-        .unwrap();
+    let embedding = messages::problem_messages(
+        &pool,
+        account.id,
+        "failed",
+        Some("embedding request failed"),
+        50,
+    )
+    .await
+    .unwrap();
     let blobless = embedding.iter().find(|m| m.id == ids[4]).unwrap();
     assert!(!blobless.retryable);
 
@@ -465,7 +497,10 @@ async fn problem_messages_filter_by_status_and_group(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(quarantined.len(), 1);
-    assert_eq!(quarantined[0].error.as_deref(), Some("sanitize: blocked html"));
+    assert_eq!(
+        quarantined[0].error.as_deref(),
+        Some("sanitize: blocked html")
+    );
 }
 
 #[sqlx::test(migrator = "db::MIGRATOR")]
@@ -483,14 +518,24 @@ async fn requeue_failed_respects_scope_and_skips_unretryable(pool: PgPool) {
 
     // Unscoped requeue picks up the remaining stored failure but skips the
     // quarantined row and the blob-less one.
-    let n = messages::requeue_failed(&pool, account.id, None).await.unwrap();
+    let n = messages::requeue_failed(&pool, account.id, None)
+        .await
+        .unwrap();
     assert_eq!(n, 1);
     assert_eq!(
-        messages::get(&pool, ids[3]).await.unwrap().unwrap().index_status,
+        messages::get(&pool, ids[3])
+            .await
+            .unwrap()
+            .unwrap()
+            .index_status,
         "quarantined"
     );
     assert_eq!(
-        messages::get(&pool, ids[4]).await.unwrap().unwrap().index_status,
+        messages::get(&pool, ids[4])
+            .await
+            .unwrap()
+            .unwrap()
+            .index_status,
         "failed"
     );
 
@@ -510,15 +555,39 @@ async fn requeue_one_guards_ownership_and_state(pool: PgPool) {
     let (account, ids) = problem_fixture(&pool).await;
 
     // Failed and quarantined rows are both retryable one at a time.
-    assert!(messages::requeue_one(&pool, ids[0], account.id).await.unwrap());
-    assert!(messages::requeue_one(&pool, ids[3], account.id).await.unwrap());
+    assert!(
+        messages::requeue_one(&pool, ids[0], account.id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        messages::requeue_one(&pool, ids[3], account.id)
+            .await
+            .unwrap()
+    );
     let q = messages::get(&pool, ids[3]).await.unwrap().unwrap();
     assert_eq!(q.index_status, "staged");
     assert_eq!(q.error, None);
 
     // Already staged, indexed, blob-less, or foreign-account rows refuse.
-    assert!(!messages::requeue_one(&pool, ids[0], account.id).await.unwrap());
-    assert!(!messages::requeue_one(&pool, ids[5], account.id).await.unwrap());
-    assert!(!messages::requeue_one(&pool, ids[4], account.id).await.unwrap());
-    assert!(!messages::requeue_one(&pool, ids[2], account.id + 999).await.unwrap());
+    assert!(
+        !messages::requeue_one(&pool, ids[0], account.id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !messages::requeue_one(&pool, ids[5], account.id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !messages::requeue_one(&pool, ids[4], account.id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !messages::requeue_one(&pool, ids[2], account.id + 999)
+            .await
+            .unwrap()
+    );
 }
