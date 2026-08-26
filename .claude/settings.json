@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "input=$(cat); printf \"%s\" \"$input\" | jq -e '.tool_input.command // \"\" | test(\"git commit\")' >/dev/null || exit 0; cd \"${CLAUDE_PROJECT_DIR:-.}\" || exit 0; if cargo fmt --check >/dev/null 2>&1; then exit 0; fi; echo \"Blocked: cargo fmt --check failed. Run cargo fmt, restage, and retry the commit.\" >&2; exit 2",
+            "timeout": 120,
+            "statusMessage": "Pre-commit: cargo fmt --check"
+          }
+        ]
+      }
+    ]
+  }
+}
