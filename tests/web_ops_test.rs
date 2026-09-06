@@ -114,6 +114,7 @@ impl OpsHarness {
             mcp: Default::default(),
             defaults: UserDefaults::default(),
             google: None,
+            microsoft: None,
         };
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -1,6 +1,6 @@
 //! Shared setup for the batch subcommands: account, unsealed
-//! credential, source client (JMAP, Gmail, or IMAP, per the account's
-//! provider), and the per-account Maildir. The caller's pool is
+//! credential, source client (JMAP, Gmail, IMAP, or Office 365, per the
+//! account's provider), and the per-account Maildir. The caller's pool is
 //! borrowed, never duplicated — web-spawned jobs would exhaust
 //! Postgres connections otherwise.
 
@@ -14,18 +14,20 @@ use crate::gmail::GmailClient;
 use crate::imap::{ImapClient, TlsMode};
 use crate::jmap::{JmapClient, RetryPolicy};
 use crate::maildir::Maildir;
+use crate::o365::O365Client;
 
 pub const SEAL_KEY_ID: &str = "primary";
 
-/// The account's mail source. Enum, not a trait: the three sync models
+/// The account's mail source. Enum, not a trait: the four sync models
 /// are structurally different (opaque state strings + separate blob
 /// download vs. monotonic history ids + format=raw vs. per-folder UID
-/// diffing over a placement map), so job execution matches on the
-/// variant and calls the matching engine.
+/// diffing over a placement map vs. per-folder Graph delta links), so
+/// job execution matches on the variant and calls the matching engine.
 pub enum SourceClient {
     Jmap(JmapClient),
     Gmail(GmailClient),
     Imap(ImapClient),
+    O365(O365Client),
 }
 
 pub struct AccountContext {
@@ -49,8 +51,8 @@ impl AccountContext {
                 sealer.key_id()
             );
         }
-        // JMAP bearer token, Gmail refresh token, or IMAP password, per
-        // provider.
+        // JMAP bearer token, Gmail/Microsoft refresh token, or IMAP
+        // password, per provider.
         let token = String::from_utf8(sealer.unseal(&account.sealed_token)?)
             .context("unsealed token is not valid UTF-8")?;
 
@@ -66,6 +68,25 @@ impl AccountContext {
                 // Fail fast on a bad grant, like the JMAP session fetch does.
                 client.access_token().await?;
                 SourceClient::Gmail(client)
+            }
+            "o365" => {
+                let microsoft = config.microsoft.as_ref().with_context(|| {
+                    format!(
+                        "account {} is an o365 account but [microsoft] is not configured",
+                        account.id
+                    )
+                })?;
+                let client = O365Client::new(
+                    microsoft,
+                    token,
+                    RetryPolicy::default(),
+                    std::sync::Arc::new(sealer.clone()),
+                )?;
+                // Fail fast on a bad grant. Microsoft rotates the refresh
+                // token on this very call, so persist it right away.
+                client.access_token().await?;
+                crate::o365::checkpoint_token(pool, account.id, &client).await?;
+                SourceClient::O365(client)
             }
             "imap" => {
                 let host = account

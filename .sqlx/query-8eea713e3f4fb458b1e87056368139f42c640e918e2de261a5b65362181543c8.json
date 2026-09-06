@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update o365_state set updated_at = now() where mail_account_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8eea713e3f4fb458b1e87056368139f42c640e918e2de261a5b65362181543c8"
+}

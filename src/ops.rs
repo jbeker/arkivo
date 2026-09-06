@@ -206,6 +206,33 @@ async fn execute(
                     .await?;
                     (stats, retried)
                 }
+                SourceClient::O365(client) => {
+                    // The refresh token may rotate mid-run; persist it
+                    // whether or not the engine succeeded.
+                    let result = crate::o365::backfill::backfill_account(
+                        pool,
+                        client,
+                        &ctx.maildir,
+                        &ctx.account,
+                        &options,
+                        Some(job_id),
+                    )
+                    .await;
+                    crate::o365::checkpoint_token(pool, account_id, client).await?;
+                    let stats = result?;
+                    if stats.cancelled {
+                        return Ok(Outcome::Cancelled(serde_json::to_value(&stats)?));
+                    }
+                    let retried = crate::o365::backfill::fetch_missing_blobs(
+                        pool,
+                        client,
+                        &ctx.maildir,
+                        &ctx.account,
+                    )
+                    .await;
+                    crate::o365::checkpoint_token(pool, account_id, client).await?;
+                    (stats, retried?)
+                }
             };
             let mut value = serde_json::to_value(&stats)?;
             value["retried_blobs"] = json!(retried);
@@ -247,6 +274,19 @@ async fn execute(
                         ctx.deletion_policy(),
                     )
                     .await?
+                }
+                SourceClient::O365(client) => {
+                    let result = crate::o365::sync::poll_account(
+                        pool,
+                        client,
+                        &ctx.maildir,
+                        Some(&search),
+                        &ctx.account,
+                        ctx.deletion_policy(),
+                    )
+                    .await;
+                    crate::o365::checkpoint_token(pool, account_id, client).await?;
+                    result?
                 }
             };
             Ok(Outcome::Succeeded(serde_json::to_value(&stats)?))

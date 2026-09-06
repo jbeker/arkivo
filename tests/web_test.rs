@@ -60,6 +60,7 @@ impl WebHarness {
             mcp: Default::default(),
             defaults: UserDefaults::default(),
             google: None,
+            microsoft: None,
         };
         tweak(&mut config);
         let state = WebState {
@@ -896,6 +897,219 @@ async fn oauth_callback_rejects_denial_bad_state_and_missing_refresh_token(pool:
         .unwrap();
     assert_eq!(location(&response), "/?gmail=error");
     let user = users::get_by_handle(&pool, "gina").await.unwrap().unwrap();
+    assert!(
+        arkivo::db::accounts::list_for_user(&pool, user.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+// ---- Microsoft OAuth flow ----
+
+async fn o365_harness(
+    pool: &PgPool,
+    handle: &str,
+) -> (WebHarness, reqwest::Client, support::fake_o365::FakeO365) {
+    let fake = support::fake_o365::FakeO365::start().await;
+    let microsoft = fake.microsoft_config();
+    let h = WebHarness::start_with(pool.clone(), move |cfg| cfg.microsoft = Some(microsoft)).await;
+    let client = no_redirect_client();
+    let mut authenticator = softtoken();
+    let invite = make_invite(pool, "user").await;
+    assert_eq!(
+        h.register(&client, &mut authenticator, &invite, handle)
+            .await,
+        200
+    );
+    (h, client, fake)
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn microsoft_oauth_start_requires_config_and_session(pool: PgPool) {
+    let h = WebHarness::start(pool.clone()).await;
+    let client = no_redirect_client();
+    let mut authenticator = softtoken();
+    let invite = make_invite(&pool, "user").await;
+    assert_eq!(
+        h.register(&client, &mut authenticator, &invite, "mina")
+            .await,
+        200
+    );
+    let response = client
+        .get(format!("{}/oauth/microsoft/start", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 404);
+
+    let (h, _client, _fake) = o365_harness(&pool, "mira").await;
+    let anonymous = no_redirect_client();
+    let response = anonymous
+        .get(format!("{}/oauth/microsoft/start", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(location(&response), "/login");
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn microsoft_oauth_flow_connects_o365_account_end_to_end(pool: PgPool) {
+    let (h, client, fake) = o365_harness(&pool, "mina").await;
+
+    let response = client
+        .get(format!("{}/oauth/microsoft/start", h.base))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_redirection());
+    let consent = Url::parse(&location(&response)).unwrap();
+    assert!(consent.path().ends_with("/oauth2/v2.0/authorize"));
+    let params: std::collections::HashMap<_, _> = consent.query_pairs().into_owned().collect();
+    let state_param = params.get("state").expect("state param").clone();
+    assert_eq!(
+        params.get("scope").map(String::as_str),
+        Some("offline_access Mail.Read User.Read")
+    );
+    assert_eq!(
+        params.get("code_challenge_method").map(String::as_str),
+        Some("S256")
+    );
+    assert_eq!(
+        params.get("prompt").map(String::as_str),
+        Some("select_account")
+    );
+    assert!(
+        params
+            .get("redirect_uri")
+            .unwrap()
+            .ends_with("/oauth/microsoft/callback")
+    );
+
+    fake.expect_auth_code("ms-code");
+    let anonymous = no_redirect_client();
+    let response = anonymous
+        .get(format!(
+            "{}/oauth/microsoft/callback?code=ms-code&state={state_param}",
+            h.base
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(location(&response), "/?o365=connected");
+
+    let user = users::get_by_handle(&pool, "mina").await.unwrap().unwrap();
+    let accounts = arkivo::db::accounts::list_for_user(&pool, user.id)
+        .await
+        .unwrap();
+    assert_eq!(accounts.len(), 1);
+    let account = &accounts[0];
+    assert_eq!(account.provider, "o365");
+    assert_eq!(
+        account.account_id.as_deref(),
+        Some(support::fake_o365::MAIL)
+    );
+    // The /me check rotated the token; the newest one is what's sealed.
+    let sealer = Sealer::new(&[7u8; 32], "primary").unwrap();
+    let sealed = String::from_utf8(sealer.unseal(&account.sealed_token).unwrap()).unwrap();
+    assert_eq!(Some(&sealed), fake.refresh_tokens_issued().last());
+    assert_ne!(sealed, support::fake_o365::REFRESH_TOKEN);
+    assert!(
+        arkivo::db::accounts::get_o365_state(&pool, account.id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    // Replay fails; a second connect of the same mailbox is a duplicate.
+    let response = anonymous
+        .get(format!(
+            "{}/oauth/microsoft/callback?code=ms-code&state={state_param}",
+            h.base
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 400);
+    let response = client
+        .get(format!("{}/oauth/microsoft/start", h.base))
+        .send()
+        .await
+        .unwrap();
+    let consent = Url::parse(&location(&response)).unwrap();
+    let state2 = consent
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .map(|(_, v)| v.into_owned())
+        .unwrap();
+    fake.expect_auth_code("ms-code-2");
+    let response = anonymous
+        .get(format!(
+            "{}/oauth/microsoft/callback?code=ms-code-2&state={state2}",
+            h.base
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(location(&response), "/?o365=exists");
+
+    // The dashboard status names the mailbox.
+    let status: Value = client
+        .get(format!("{}/api/status", h.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let listed = status["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["provider"] == "o365")
+        .expect("o365 account in status");
+    assert_eq!(listed["email"], support::fake_o365::MAIL);
+    assert_eq!(listed["backfill_done"], false);
+}
+
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn microsoft_oauth_callback_rejects_denial_and_missing_refresh_token(pool: PgPool) {
+    let (h, client, fake) = o365_harness(&pool, "mina").await;
+    let anonymous = no_redirect_client();
+
+    let response = anonymous
+        .get(format!(
+            "{}/oauth/microsoft/callback?error=access_denied&state=whatever",
+            h.base
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(location(&response), "/?o365=denied");
+
+    let response = client
+        .get(format!("{}/oauth/microsoft/start", h.base))
+        .send()
+        .await
+        .unwrap();
+    let consent = Url::parse(&location(&response)).unwrap();
+    let state_param = consent
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .map(|(_, v)| v.into_owned())
+        .unwrap();
+    fake.expect_auth_code("ms-code-3");
+    fake.omit_refresh_token(true);
+    let response = anonymous
+        .get(format!(
+            "{}/oauth/microsoft/callback?code=ms-code-3&state={state_param}",
+            h.base
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(location(&response), "/?o365=error");
+    let user = users::get_by_handle(&pool, "mina").await.unwrap().unwrap();
     assert!(
         arkivo::db::accounts::list_for_user(&pool, user.id)
             .await

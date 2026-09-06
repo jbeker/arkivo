@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into o365_state (mail_account_id) values ($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f6beb0490d8eead6dbf8f9b5d36abe65e434abf5836a4bfb53fd9a89de23de18"
+}

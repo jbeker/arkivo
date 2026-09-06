@@ -114,6 +114,16 @@ async fn status(
                     row.as_ref().map(|s| s.updated_at),
                 )
             }
+            "o365" => {
+                let row = accounts::get_o365_state(&state.pool, account.id)
+                    .await
+                    .ok()
+                    .flatten();
+                (
+                    row.as_ref().map(|s| s.backfill_done),
+                    row.as_ref().map(|s| s.updated_at),
+                )
+            }
             _ => {
                 let row = accounts::get_jmap_state(&state.pool, account.id)
                     .await

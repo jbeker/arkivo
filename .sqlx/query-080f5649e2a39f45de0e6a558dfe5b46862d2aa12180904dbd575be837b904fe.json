@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select mail_account_id, backfill_done, backfill_since, updated_at\n           from o365_state where mail_account_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "mail_account_id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "o365_state",
+            "name": "mail_account_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "backfill_done",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "o365_state",
+            "name": "backfill_done"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "backfill_since",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "o365_state",
+            "name": "backfill_since"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "updated_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "o365_state",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "080f5649e2a39f45de0e6a558dfe5b46862d2aa12180904dbd575be837b904fe"
+}

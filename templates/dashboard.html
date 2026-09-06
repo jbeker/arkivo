@@ -34,10 +34,21 @@
   </div>
   {% endif %}
 
+  {% if o365_enabled %}
+  <div class="card" style="margin-top: var(--space-md)">
+    <h3 style="margin-top:0">Connect a Microsoft 365 account</h3>
+    <div class="field-row">
+      <span>You'll approve read-only mailbox access in Microsoft; only the archive can read it.</span>
+      <a class="btn btn-primary" href="/oauth/microsoft/start">Connect Microsoft 365</a>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="card" style="margin-top: var(--space-md)">
     <h3 style="margin-top:0">Add an IMAP account</h3>
     <p class="hint">For Gmail, prefer “Connect a Gmail account” above — over IMAP every label
-      becomes a folder. Use an app password if your provider offers them.</p>
+      becomes a folder. Microsoft 365 mailboxes no longer accept IMAP passwords; use
+      “Connect a Microsoft 365 account”. Use an app password if your provider offers them.</p>
     <div class="field-row">
       <input id="imap-host" placeholder="imap.example.com" size="24">
       <input id="imap-port" placeholder="993" size="6" inputmode="numeric">

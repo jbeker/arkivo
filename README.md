@@ -2,7 +2,8 @@
 
 Email archive with recency-gated, agent-safe search. Arkivo ingests
 mail — a Fastmail account over JMAP, a Gmail account via the Gmail API
-with OAuth, or any mailbox over IMAP — into a canonical Maildir store,
+with OAuth, a Microsoft 365 mailbox via Graph, or any mailbox over IMAP
+— into a canonical Maildir store,
 promotes messages past
 a configurable **recency cutoff** through sanitization into OpenSearch
 (BM25 + semantic vectors), and exposes read-only hybrid search to AI
@@ -30,7 +31,7 @@ for automation (the worker container's cron uses them) and as a fallback:
 |--------------|------|
 | `serve-web`  | Web administration UI (WebAuthn passkeys only) |
 | `serve-mcp`  | Read-only MCP search server (bearer tokens) |
-| `poll`       | Incremental sync, JMAP, Gmail, or IMAP per account (`--account N` or `--all`) — cron entry point |
+| `poll`       | Incremental sync, JMAP, Gmail, Microsoft 365, or IMAP per account (`--account N` or `--all`) — cron entry point |
 | `promote`    | Move aged messages through sanitization into the index — cron entry point |
 | `backfill`   | Seed the archive from the mail source (resumable; `--limit`, `--since`) |
 | `reindex`    | Rebuild the search index from the Maildir (`--recreate` for mapping changes) |
@@ -75,8 +76,9 @@ Everything else happens in the browser:
    create the first admin with a passkey (no invite needed; the flow
    closes permanently once a user exists).
 2. Add your mail account: a Fastmail read-only API token, **Connect
-   Gmail** with read-only access approved at Google, or an IMAP
-   host/username/password. Every credential is validated live,
+   Gmail** with read-only access approved at Google, **Connect
+   Microsoft 365** with read-only access approved at Microsoft, or an
+   IMAP host/username/password. Every credential is validated live,
    then sealed and stored.
 3. Press **start backfill** — optionally with a message limit as a
    smoke test first. Progress is shown live; the job is cancellable and
@@ -97,6 +99,34 @@ client_secret = "..."   # or ARKIVO_GOOGLE__CLIENT_SECRET
 
 The refresh token is sealed like the Fastmail token. Spam and Trash are
 never archived; deletions upstream follow the account's deletion policy.
+
+### Microsoft 365
+
+Office 365 and personal Microsoft mailboxes are archived over the Graph
+API; Exchange Online no longer accepts IMAP passwords. Register an app
+in the Entra admin center: Web platform, redirect URI
+`<rp_origin>/oauth/microsoft/callback`, a client secret (note its
+expiry), and the delegated permissions `Mail.Read`, `User.Read`, and
+`offline_access`. Choose "any organizational directory and personal
+accounts" for the default `tenant = "common"`, or single-tenant and set
+`tenant` to the tenant id. Then configure:
+
+```toml
+[microsoft]
+client_id = "..."
+client_secret = "..."   # or ARKIVO_MICROSOFT__CLIENT_SECRET
+tenant = "common"
+```
+
+The refresh token is sealed like the other credentials; Microsoft
+rotates it on every use, so jobs rewrite the sealed value. Messages are
+identified by their Graph immutable id and filed under the folder's
+display path ("Inbox", "Archive/2024"). Deleted Items and Junk Email
+are never archived, so moving a message there counts as a deletion
+under the account's deletion policy, unlike Gmail where Trash is a
+label. A backfill with a `since` date bakes that floor into the sync
+state: newer mail is always picked up, but an older message later moved
+into a folder is not; run a backfill without `since` to widen.
 
 ### IMAP
 

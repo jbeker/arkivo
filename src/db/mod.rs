@@ -9,6 +9,7 @@ pub mod imap_map;
 pub mod jobs;
 pub mod locks;
 pub mod messages;
+pub mod o365_folders;
 pub mod oauth_states;
 pub mod tokens;
 pub mod users;

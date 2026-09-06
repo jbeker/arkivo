@@ -162,24 +162,33 @@ function table(rows, headers) {
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-// Outcome of a Gmail OAuth round trip, delivered via query param because
-// the callback redirect has no other channel back to the page.
-function surfaceGmailOutcome() {
-  const outcome = new URLSearchParams(location.search).get("gmail");
-  if (!outcome) return;
-  const texts = {
-    connected: ["Gmail connected — click “Import mail” to download it, then “Index for search”.", true],
-    denied: ["Gmail connection cancelled at the Google consent screen.", false],
-    exists: ["That Gmail account is already connected.", false],
-    error: ["Connecting Gmail failed — check the server logs and try again.", false],
+// Outcome of an OAuth round trip (Gmail or Microsoft 365), delivered via
+// query param because the callback redirect has no other channel back to
+// the page.
+function surfaceOauthOutcome() {
+  const params = new URLSearchParams(location.search);
+  const providers = {
+    gmail: ["Gmail", "the Google consent screen"],
+    o365: ["Microsoft 365", "the Microsoft consent screen"],
   };
-  const [text, ok] = texts[outcome] || [`gmail: ${outcome}`, false];
-  msg("acct-msg", text, ok);
-  history.replaceState(null, "", location.pathname);
+  for (const [key, [name, screen]] of Object.entries(providers)) {
+    const outcome = params.get(key);
+    if (!outcome) continue;
+    const texts = {
+      connected: [`${name} connected — click “Import mail” to download it, then “Index for search”.`, true],
+      denied: [`${name} connection cancelled at ${screen}.`, false],
+      exists: [`That ${name} account is already connected.`, false],
+      error: [`Connecting ${name} failed — check the server logs and try again.`, false],
+    };
+    const [text, ok] = texts[outcome] || [`${key}: ${outcome}`, false];
+    msg("acct-msg", text, ok);
+    history.replaceState(null, "", location.pathname);
+    return;
+  }
 }
 
 async function loadDashboard(isAdmin) {
-  surfaceGmailOutcome();
+  surfaceOauthOutcome();
   await Promise.all([
     refreshStatus(),
     refreshTokens(),
@@ -289,6 +298,8 @@ function accountPanel(a, running) {
 
   const label = a.provider === "gmail"
     ? `${esc(a.email || "Gmail")} · Gmail`
+    : a.provider === "o365"
+    ? `${esc(a.email || "Microsoft 365")} · Microsoft 365`
     : a.provider === "imap"
     ? `${esc(a.email || "IMAP")} · IMAP`
     : accountLabel(a.jmap_session_url);
@@ -354,7 +365,7 @@ async function refreshStatus() {
     .join('<div style="height: var(--space-md)"></div>');
   document.getElementById("accounts").innerHTML =
     status.accounts.length ? panels
-      : `<p class="empty">No accounts yet. Add a Fastmail account or connect Gmail below to begin.</p>`;
+      : `<p class="empty">No accounts yet. Add a Fastmail or IMAP account, or connect Gmail or Microsoft 365 below to begin.</p>`;
 
   // Auto-refresh while anything is running; stop when idle.
   const busy = (status.running_jobs || []).length > 0;

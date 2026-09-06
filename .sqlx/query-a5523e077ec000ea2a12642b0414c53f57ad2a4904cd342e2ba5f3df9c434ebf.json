@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from o365_folders where mail_account_id = $1 and folder_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a5523e077ec000ea2a12642b0414c53f57ad2a4904cd342e2ba5f3df9c434ebf"
+}

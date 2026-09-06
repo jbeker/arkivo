@@ -1,4 +1,4 @@
-use arkivo::db::{self, accounts, audit, jobs, messages, tokens, users};
+use arkivo::db::{self, accounts, audit, jobs, messages, o365_folders, tokens, users};
 use chrono::{Duration, Utc};
 use sqlx::PgPool;
 
@@ -589,5 +589,113 @@ async fn requeue_one_guards_ownership_and_state(pool: PgPool) {
         !messages::requeue_one(&pool, ids[2], account.id + 999)
             .await
             .unwrap()
+    );
+}
+
+#[sqlx::test(migrator = "db::MIGRATOR")]
+async fn o365_account_state_and_folder_cursors_roundtrip(pool: PgPool) {
+    let user = users::create(&pool, "olive", "user").await.unwrap();
+    let account = accounts::create_o365(&pool, user.id, "olive@contoso.com", b"sealed-0", "k1")
+        .await
+        .unwrap();
+    assert_eq!(account.provider, "o365");
+    assert_eq!(account.account_id.as_deref(), Some("olive@contoso.com"));
+    let state = accounts::get_o365_state(&pool, account.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!state.backfill_done);
+    assert!(state.backfill_since.is_none());
+
+    // Rotation rewrites the sealed credential in place.
+    accounts::set_sealed_token(&pool, account.id, b"sealed-1")
+        .await
+        .unwrap();
+    let reread = accounts::get(&pool, account.id).await.unwrap().unwrap();
+    assert_eq!(reread.sealed_token, b"sealed-1");
+    assert_eq!(reread.seal_key_id, "k1");
+
+    // Folder rows: upsert never touches cursors; links have a lifecycle.
+    o365_folders::upsert(&pool, account.id, "f1", "Inbox", Some("inbox"), Some(3))
+        .await
+        .unwrap();
+    o365_folders::set_next_link(&pool, account.id, "f1", Some("next-1"))
+        .await
+        .unwrap();
+    o365_folders::upsert(&pool, account.id, "f1", "Inbox", Some("inbox"), Some(4))
+        .await
+        .unwrap();
+    let f = o365_folders::get(&pool, account.id, "f1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(f.next_link.as_deref(), Some("next-1"));
+    assert_eq!(f.total_item_count, Some(4));
+    o365_folders::set_delta_link(&pool, account.id, "f1", "delta-1")
+        .await
+        .unwrap();
+    let f = o365_folders::get(&pool, account.id, "f1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(f.delta_link.as_deref(), Some("delta-1"));
+    assert!(f.next_link.is_none());
+    o365_folders::mark_resync(&pool, account.id, "f1", true)
+        .await
+        .unwrap();
+    let f = o365_folders::get(&pool, account.id, "f1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(f.delta_link.is_none() && f.resync_pending);
+    o365_folders::clear_resync_pending(&pool, account.id, "f1")
+        .await
+        .unwrap();
+    assert!(
+        !o365_folders::get(&pool, account.id, "f1")
+            .await
+            .unwrap()
+            .unwrap()
+            .resync_pending
+    );
+
+    // Placement queries operate on the single-element mailbox_ids.
+    let mut m = meta("g1", 1);
+    m.mailbox_ids = serde_json::json!(["Inbox"]);
+    messages::upsert_meta(&pool, account.id, &m).await.unwrap();
+    let mut m2 = meta("g2", 1);
+    m2.mailbox_ids = serde_json::json!(["Archive"]);
+    messages::upsert_meta(&pool, account.id, &m2).await.unwrap();
+    assert_eq!(
+        o365_folders::message_ids_in_path(&pool, account.id, "Inbox")
+            .await
+            .unwrap(),
+        vec!["g1".to_string()]
+    );
+    assert_eq!(
+        o365_folders::rename_path(&pool, account.id, "Inbox", "Mail")
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        o365_folders::message_ids_in_path(&pool, account.id, "Mail")
+            .await
+            .unwrap(),
+        vec!["g1".to_string()]
+    );
+    assert!(
+        o365_folders::message_ids_in_path(&pool, account.id, "Inbox")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    o365_folders::delete(&pool, account.id, "f1").await.unwrap();
+    assert!(
+        o365_folders::list(&pool, account.id)
+            .await
+            .unwrap()
+            .is_empty()
     );
 }

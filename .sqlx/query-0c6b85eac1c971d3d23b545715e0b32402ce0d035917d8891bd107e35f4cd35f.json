@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into o365_folders\n               (mail_account_id, folder_id, display_path, well_known_name, total_item_count)\n           values ($1, $2, $3, $4, $5)\n           on conflict (mail_account_id, folder_id) do update\n               set display_path = excluded.display_path,\n                   well_known_name = excluded.well_known_name,\n                   total_item_count = excluded.total_item_count,\n                   updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0c6b85eac1c971d3d23b545715e0b32402ce0d035917d8891bd107e35f4cd35f"
+}

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select jmap_email_id from messages\n           where mail_account_id = $1 and mailbox_ids = $2 and deleted_at is null",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "jmap_email_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "messages",
+            "name": "jmap_email_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d41af38cc0968185c1667c6be3144f348e48e2bb7d52d0247e541c82942f298c"
+}

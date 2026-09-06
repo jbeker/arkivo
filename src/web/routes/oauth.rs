@@ -1,4 +1,6 @@
-//! Google OAuth consent flow for connecting a Gmail account.
+//! Google OAuth consent flow for connecting a Gmail account. The
+//! provider-neutral pieces (state row, PKCE, code exchange) are shared
+//! with the Microsoft flow in `oauth_microsoft.rs`.
 //!
 //! `/oauth/google/start` lives in the authed router: navigating there
 //! from the dashboard is same-site, so the Strict session cookie is
@@ -26,7 +28,7 @@ use crate::jmap::RetryPolicy;
 use crate::web::{CurrentUser, WebState};
 
 const SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
-const STATE_TTL_SECS: i64 = 600;
+pub(super) const STATE_TTL_SECS: i64 = 600;
 
 pub fn authed_router() -> Router<WebState> {
     Router::new().route("/oauth/google/start", get(start))
@@ -36,8 +38,26 @@ pub fn public_router() -> Router<WebState> {
     Router::new().route("/oauth/google/callback", get(callback))
 }
 
-fn pkce_challenge(verifier: &str) -> String {
+pub(super) fn pkce_challenge(verifier: &str) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+}
+
+/// A freshly minted, user-bound handshake: the state nonce to send to
+/// the provider verbatim (only its hash is stored, so a database read
+/// can't forge a live callback) and the PKCE verifier kept server-side.
+pub(super) struct StartedState {
+    pub nonce: String,
+    pub verifier: String,
+}
+
+pub(super) async fn begin_state(pool: &sqlx::PgPool, user_id: i64) -> anyhow::Result<StartedState> {
+    let nonce = generate_token("gs");
+    let verifier = hex::encode(rand::random::<[u8; 32]>());
+    oauth_states::create(pool, user_id, &nonce.hash, &verifier, STATE_TTL_SECS).await?;
+    Ok(StartedState {
+        nonce: nonce.token,
+        verifier,
+    })
 }
 
 async fn start(
@@ -52,16 +72,13 @@ async fn start(
             .into_response();
     };
 
-    // The state nonce goes to Google verbatim; only its hash is stored,
-    // so a database read can't forge a live callback.
-    let nonce = generate_token("gs");
-    let verifier = hex::encode(rand::random::<[u8; 32]>());
-    if let Err(e) =
-        oauth_states::create(&state.pool, user.id, &nonce.hash, &verifier, STATE_TTL_SECS).await
-    {
-        tracing::error!(error = %format!("{e:#}"), "oauth state create failed");
-        return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
-    }
+    let started = match begin_state(&state.pool, user.id).await {
+        Ok(started) => started,
+        Err(e) => {
+            tracing::error!(error = %format!("{e:#}"), "oauth state create failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response();
+        }
+    };
 
     let query = {
         let mut qs = url::form_urlencoded::Serializer::new(String::new());
@@ -75,8 +92,8 @@ async fn start(
         // offline + consent guarantees a refresh_token even on re-consent.
         qs.append_pair("access_type", "offline");
         qs.append_pair("prompt", "consent");
-        qs.append_pair("state", &nonce.token);
-        qs.append_pair("code_challenge", &pkce_challenge(&verifier));
+        qs.append_pair("state", &started.nonce);
+        qs.append_pair("code_challenge", &pkce_challenge(&started.verifier));
         qs.append_pair("code_challenge_method", "S256");
         qs.finish()
     };
@@ -84,17 +101,17 @@ async fn start(
 }
 
 #[derive(Deserialize)]
-struct CallbackParams {
-    code: Option<String>,
-    state: Option<String>,
-    error: Option<String>,
+pub(super) struct CallbackParams {
+    pub code: Option<String>,
+    pub state: Option<String>,
+    pub error: Option<String>,
 }
 
 #[derive(Deserialize)]
-struct ExchangeResponse {
+pub(super) struct ExchangeResponse {
     #[allow(dead_code)]
-    access_token: String,
-    refresh_token: Option<String>,
+    pub access_token: String,
+    pub refresh_token: Option<String>,
 }
 
 async fn callback(State(state): State<WebState>, Query(params): Query<CallbackParams>) -> Response {
@@ -126,11 +143,18 @@ async fn callback(State(state): State<WebState>, Query(params): Query<CallbackPa
         }
     };
 
+    let token_url = google
+        .token_url
+        .clone()
+        .unwrap_or_else(|| "https://oauth2.googleapis.com/token".to_string());
     let refresh_token = match exchange_code(
-        &google,
-        &state.config.web.rp_origin,
+        &token_url,
+        &google.client_id,
+        &google.client_secret,
+        &GoogleConfig::redirect_uri(&state.config.web.rp_origin),
         code,
         &consumed.pkce_verifier,
+        &[],
     )
     .await
     {
@@ -219,24 +243,30 @@ async fn callback(State(state): State<WebState>, Query(params): Query<CallbackPa
     }
 }
 
-async fn exchange_code(
-    google: &GoogleConfig,
-    rp_origin: &str,
+/// Redeem an authorization code at `token_url`. `extra` carries
+/// provider-specific form fields (Microsoft wants `scope` here).
+pub(super) async fn exchange_code(
+    token_url: &str,
+    client_id: &str,
+    client_secret: &str,
+    redirect_uri: &str,
     code: &str,
     pkce_verifier: &str,
+    extra: &[(&str, &str)],
 ) -> anyhow::Result<ExchangeResponse> {
-    let body = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("grant_type", "authorization_code")
-        .append_pair("code", code)
-        .append_pair("client_id", &google.client_id)
-        .append_pair("client_secret", &google.client_secret)
-        .append_pair("redirect_uri", &GoogleConfig::redirect_uri(rp_origin))
-        .append_pair("code_verifier", pkce_verifier)
-        .finish();
-    let token_url = google
-        .token_url
-        .as_deref()
-        .unwrap_or("https://oauth2.googleapis.com/token");
+    let body = {
+        let mut qs = url::form_urlencoded::Serializer::new(String::new());
+        qs.append_pair("grant_type", "authorization_code");
+        qs.append_pair("code", code);
+        qs.append_pair("client_id", client_id);
+        qs.append_pair("client_secret", client_secret);
+        qs.append_pair("redirect_uri", redirect_uri);
+        qs.append_pair("code_verifier", pkce_verifier);
+        for (k, v) in extra {
+            qs.append_pair(k, v);
+        }
+        qs.finish()
+    };
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()?;

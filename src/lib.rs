@@ -12,6 +12,7 @@ pub mod jmap;
 pub mod maildir;
 pub mod mcp;
 pub mod metrics;
+pub mod o365;
 pub mod ops;
 pub mod promote;
 pub mod sanitize;

@@ -28,6 +28,12 @@ pub struct AppConfig {
     /// clear error until it is restored.
     #[serde(default)]
     pub google: Option<GoogleConfig>,
+    /// Microsoft identity platform OAuth client for Office 365 ingestion
+    /// over Graph. Absent disables the "Connect Microsoft 365" flow;
+    /// existing o365 accounts fail jobs with a clear error until it is
+    /// restored.
+    #[serde(default)]
+    pub microsoft: Option<MicrosoftConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -55,6 +61,63 @@ impl GoogleConfig {
             .as_deref()
             .unwrap_or("https://accounts.google.com/o/oauth2/v2/auth")
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MicrosoftConfig {
+    pub client_id: String,
+    /// Prefer supplying via ARKIVO_MICROSOFT__CLIENT_SECRET.
+    pub client_secret: String,
+    /// Entra tenant the consent flow authorizes against: "common" (any
+    /// work/school or personal account), "organizations", "consumers",
+    /// or a tenant id / verified domain to lock it to one directory.
+    #[serde(default = "default_tenant")]
+    pub tenant: String,
+    /// Endpoint overrides for tests; unset means real Microsoft.
+    #[serde(default)]
+    pub auth_url: Option<String>,
+    #[serde(default)]
+    pub token_url: Option<String>,
+    #[serde(default)]
+    pub api_base: Option<String>,
+}
+
+impl MicrosoftConfig {
+    /// The registered OAuth redirect URI, derived from the web origin.
+    pub fn redirect_uri(rp_origin: &str) -> String {
+        format!(
+            "{}/oauth/microsoft/callback",
+            rp_origin.trim_end_matches('/')
+        )
+    }
+
+    pub fn auth_url(&self) -> String {
+        self.auth_url.clone().unwrap_or_else(|| {
+            format!(
+                "https://login.microsoftonline.com/{}/oauth2/v2.0/authorize",
+                self.tenant
+            )
+        })
+    }
+
+    pub fn token_url(&self) -> String {
+        self.token_url.clone().unwrap_or_else(|| {
+            format!(
+                "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
+                self.tenant
+            )
+        })
+    }
+
+    pub fn api_base(&self) -> String {
+        self.api_base
+            .clone()
+            .unwrap_or_else(|| "https://graph.microsoft.com/v1.0".to_string())
+    }
+}
+
+fn default_tenant() -> String {
+    "common".into()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -201,6 +264,13 @@ impl AppConfig {
         {
             config.google = None;
         }
+        if config
+            .microsoft
+            .as_ref()
+            .is_some_and(|m| m.client_id.is_empty() || m.client_secret.is_empty())
+        {
+            config.microsoft = None;
+        }
         Ok(config)
     }
 }
@@ -266,6 +336,36 @@ mod tests {
             assert_eq!(
                 cfg.google.as_ref().map(|g| g.client_id.as_str()),
                 Some("id.apps.googleusercontent.com")
+            );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn empty_microsoft_env_means_not_configured() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file("arkivo.toml", base_toml())?;
+            jail.set_env("ARKIVO_MICROSOFT__CLIENT_ID", "");
+            jail.set_env("ARKIVO_MICROSOFT__CLIENT_SECRET", "");
+            let cfg = AppConfig::load(None).expect("config should load");
+            assert!(cfg.microsoft.is_none());
+
+            jail.set_env("ARKIVO_MICROSOFT__CLIENT_ID", "app-id");
+            jail.set_env("ARKIVO_MICROSOFT__CLIENT_SECRET", "secret");
+            let cfg = AppConfig::load(None).expect("config should load");
+            let ms = cfg.microsoft.as_ref().expect("configured");
+            assert_eq!(ms.client_id, "app-id");
+            assert_eq!(ms.tenant, "common");
+            assert_eq!(
+                ms.auth_url(),
+                "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+            );
+
+            jail.set_env("ARKIVO_MICROSOFT__TENANT", "contoso.onmicrosoft.com");
+            let cfg = AppConfig::load(None).expect("config should load");
+            assert_eq!(
+                cfg.microsoft.as_ref().unwrap().token_url(),
+                "https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/token"
             );
             Ok(())
         });

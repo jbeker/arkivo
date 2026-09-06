@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update o365_folders\n           set delta_link = null, next_link = null, resync_pending = $3, updated_at = now()\n           where mail_account_id = $1 and folder_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6b3965f8c00eb26926cf73c9fce14aa207cd51f95f92b12dbed12743cd80d6fb"
+}

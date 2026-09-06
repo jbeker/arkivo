@@ -39,3 +39,13 @@ deletion_policy = "retain"  # or "mirror"
 # [google]
 # client_id = "1234567890-abc.apps.googleusercontent.com"
 # client_secret = "..."  # prefer ARKIVO_GOOGLE__CLIENT_SECRET
+
+# Optional: enables the "Connect Microsoft 365" flow. Register an app in
+# Entra ID (Web platform, redirect URI {rp_origin}/oauth/microsoft/callback)
+# with delegated Mail.Read, User.Read, and offline_access. tenant is
+# "common" (any work/school or personal account), "organizations",
+# "consumers", or a tenant id to lock the flow to one directory.
+# [microsoft]
+# client_id = "00000000-0000-0000-0000-000000000000"
+# client_secret = "..."  # prefer ARKIVO_MICROSOFT__CLIENT_SECRET
+# tenant = "common"

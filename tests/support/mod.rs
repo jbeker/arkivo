@@ -3,3 +3,5 @@
 pub mod fake_gmail;
 pub mod fake_imap;
 pub mod fake_jmap;
+
+pub mod fake_o365;

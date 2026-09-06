@@ -22,6 +22,9 @@ struct DashboardPage {
     is_admin: bool,
     /// True when [google] is configured: shows the "Connect Gmail" card.
     gmail_enabled: bool,
+    /// True when [microsoft] is configured: shows the "Connect Microsoft
+    /// 365" card.
+    o365_enabled: bool,
 }
 
 fn render<T: Template>(template: T) -> Response {
@@ -60,5 +63,6 @@ async fn dashboard(
         handle: user.handle.clone(),
         is_admin: user.is_admin(),
         gmail_enabled: state.config.google.is_some(),
+        o365_enabled: state.config.microsoft.is_some(),
     })
 }

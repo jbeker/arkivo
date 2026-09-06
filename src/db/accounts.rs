@@ -6,12 +6,13 @@ use sqlx::PgPool;
 pub struct MailAccount {
     pub id: i64,
     pub user_id: i64,
-    /// "jmap", "gmail", or "imap".
+    /// "jmap", "gmail", "imap", or "o365".
     pub provider: String,
     /// Set for provider="jmap" only.
     pub jmap_session_url: Option<String>,
-    /// JMAP accountId, the granted Gmail address for provider="gmail", or
-    /// the login username for provider="imap".
+    /// JMAP accountId, the granted Gmail address for provider="gmail",
+    /// the login username for provider="imap", or the user principal
+    /// name for provider="o365".
     pub account_id: Option<String>,
     pub sealed_token: Vec<u8>,
     pub seal_key_id: String,
@@ -53,6 +54,14 @@ pub struct GmailState {
     pub history_id: Option<String>,
     pub backfill_done: bool,
     pub backfill_cursor: Option<serde_json::Value>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct O365State {
+    pub mail_account_id: i64,
+    pub backfill_done: bool,
+    pub backfill_since: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -377,6 +386,106 @@ pub async fn set_imap_backfill_done(pool: &PgPool, mail_account_id: i64) -> Resu
            set backfill_done = true, backfill_cursor = null, updated_at = now()
            where mail_account_id = $1"#,
         mail_account_id,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn create_o365(
+    pool: &PgPool,
+    user_id: i64,
+    principal: &str,
+    sealed_refresh_token: &[u8],
+    seal_key_id: &str,
+) -> Result<MailAccount> {
+    let mut tx = pool.begin().await?;
+    let account = account_query!(
+        r#"insert into mail_accounts (user_id, provider, account_id, sealed_token, seal_key_id)
+           values ($1, 'o365', $2, $3, $4)
+           returning id, user_id, provider, jmap_session_url, account_id, sealed_token,
+                     seal_key_id, recency_cutoff_days, deletion_policy,
+                     poll_interval_secs, sanitize_policy, created_at, disabled_at,
+                     imap_host, imap_port, imap_tls"#,
+        user_id,
+        principal,
+        sealed_refresh_token,
+        seal_key_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "insert into o365_state (mail_account_id) values ($1)",
+        account.id,
+    )
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(account)
+}
+
+pub async fn get_o365_state(pool: &PgPool, mail_account_id: i64) -> Result<Option<O365State>> {
+    let state = sqlx::query_as!(
+        O365State,
+        r#"select mail_account_id, backfill_done, backfill_since, updated_at
+           from o365_state where mail_account_id = $1"#,
+        mail_account_id,
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(state)
+}
+
+/// Flip the backfill-done flag. Takes a bool because a backfill with a
+/// wider date floor re-walks every folder and must un-set it first.
+pub async fn set_o365_backfill_done(pool: &PgPool, mail_account_id: i64, done: bool) -> Result<()> {
+    sqlx::query!(
+        r#"update o365_state set backfill_done = $2, updated_at = now()
+           where mail_account_id = $1"#,
+        mail_account_id,
+        done,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn set_o365_backfill_since(
+    pool: &PgPool,
+    mail_account_id: i64,
+    since: Option<DateTime<Utc>>,
+) -> Result<()> {
+    sqlx::query!(
+        r#"update o365_state set backfill_since = $2, updated_at = now()
+           where mail_account_id = $1"#,
+        mail_account_id,
+        since,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Bump the state row's timestamp so the dashboard's "last sync" reflects
+/// a poll that changed only per-folder rows.
+pub async fn touch_o365_state(pool: &PgPool, mail_account_id: i64) -> Result<()> {
+    sqlx::query!(
+        "update o365_state set updated_at = now() where mail_account_id = $1",
+        mail_account_id,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Replace the sealed credential in place. Microsoft rotates refresh
+/// tokens on every redemption; the key id is unchanged because the same
+/// sealer that unsealed the old token sealed the new one.
+pub async fn set_sealed_token(pool: &PgPool, id: i64, sealed: &[u8]) -> Result<()> {
+    sqlx::query!(
+        "update mail_accounts set sealed_token = $2 where id = $1",
+        id,
+        sealed,
     )
     .execute(pool)
     .await?;

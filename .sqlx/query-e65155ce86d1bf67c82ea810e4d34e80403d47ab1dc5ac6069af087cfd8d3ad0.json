@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update o365_state set backfill_since = $2, updated_at = now()\n           where mail_account_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e65155ce86d1bf67c82ea810e4d34e80403d47ab1dc5ac6069af087cfd8d3ad0"
+}

@@ -86,6 +86,14 @@ services:
       # Leave unset to hide the "Connect Gmail" flow.
       ARKIVO_GOOGLE__CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       ARKIVO_GOOGLE__CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # Optional Microsoft 365 ingestion over Graph (Entra app registration with
+      # delegated Mail.Read + User.Read + offline_access, redirect URI
+      # ${RP_ORIGIN}/oauth/microsoft/callback). Leave unset to hide the
+      # "Connect Microsoft 365" flow. TENANT: common | organizations |
+      # consumers | a tenant id.
+      ARKIVO_MICROSOFT__CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
+      ARKIVO_MICROSOFT__CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
+      ARKIVO_MICROSOFT__TENANT: ${MICROSOFT_TENANT:-common}
     ports:
       - "8480:8080"
     volumes:
