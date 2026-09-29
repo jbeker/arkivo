@@ -199,6 +199,7 @@ async function loadDashboard(isAdmin) {
 }
 
 let refreshTimer = null;
+let refreshTimerMs = 0;
 
 function jobProgress(job, account) {
   const s = job.stats || {};
@@ -253,9 +254,24 @@ function messageSummary(c) {
   return `<strong>${c.total}</strong> messages <span class="muted">·</span> ${parts.join(' <span class="muted">·</span> ')}`;
 }
 
+// Reconnect-shaped errors: an expired/revoked OAuth grant or an Entra
+// tenant problem. Retrying will not help; the user must re-authorize.
+function needsReconnect(a, error) {
+  if (a.provider !== "gmail" && a.provider !== "o365") return false;
+  const text = String(error || "");
+  return /invalid_grant|AADSTS|no longer valid|reconnect the account/i.test(text);
+}
+
+function reconnectHref(a) {
+  return a.provider === "gmail" ? "/oauth/google/start" : "/oauth/microsoft/start";
+}
+
 // Surface a failure where the decision is made. An incomplete import wins
-// (it's the actionable state); otherwise flag the most recent failed job.
-function statusBanner(a, lastByKind, latest) {
+// (it's the actionable state); otherwise flag a failed sync. The sync
+// summary is used rather than the newest job so a failed scheduled poll
+// stays visible even after a later promote succeeds.
+function statusBanner(a, lastByKind) {
+  const sync = a.sync;
   if (!a.backfill_done) {
     const failed = lastByKind.backfill && lastByKind.backfill.status === "failed";
     const detail = failed
@@ -269,24 +285,67 @@ function statusBanner(a, lastByKind, latest) {
       <button class="btn btn-primary btn-sm" onclick="startBackfill(${a.id})">Resume import</button>
     </div>`;
   }
-  if (latest && latest.status === "failed") {
-    const retry = latest.kind === "backfill"
-      ? `startBackfill(${a.id})`
-      : `startJob(${a.id}, '${latest.kind}')`;
+  if (sync && sync.last_attempt_status === "failed") {
+    const n = sync.consecutive_failures || 1;
+    const since = sync.last_success_at
+      ? `Last successful sync ${timeAgo(sync.last_success_at)}.`
+      : "This account has never synced successfully.";
+    const title = needsReconnect(a, sync.last_attempt_error)
+      ? "Account needs to be reconnected"
+      : n > 1 ? `Mail sync has failed ${n} times in a row` : `Last ${esc(sync.last_attempt_kind)} failed`;
+    const action = needsReconnect(a, sync.last_attempt_error)
+      ? `<a class="btn btn-primary btn-sm" href="${reconnectHref(a)}">Reconnect</a>`
+      : `<button class="btn btn-sm" onclick="startJob(${a.id}, 'poll')">Retry</button>`;
     return `<div class="banner banner-danger">
       <div class="banner-body">
-        <p class="banner-title">Last ${esc(latest.kind)} failed</p>
-        <p class="banner-detail">${esc(latest.error || "unknown error")}</p>
+        <p class="banner-title">${title}</p>
+        <p class="banner-detail">${esc(sync.last_attempt_error || "unknown error")}</p>
+        <p class="banner-detail">${since} Failed ${timeAgo(sync.last_attempt_finished_at || sync.last_attempt_at)}.</p>
       </div>
-      <button class="btn btn-sm" onclick="${retry}">Retry</button>
+      ${action}
     </div>`;
   }
   return "";
 }
 
+// Header pill summarising mail-sync health from the jobs history.
+function syncPill(a) {
+  const sync = a.sync;
+  if (!sync) return `<span class="pill">never synced</span>`;
+  const failures = sync.consecutive_failures || 0;
+  if (failures > 0) {
+    return `<span class="pill pill-danger" title="${esc(sync.last_attempt_error || "")}">` +
+      `sync failing${failures > 1 ? ` ×${failures}` : ""}</span>`;
+  }
+  if (sync.last_success_at) {
+    return `<span class="pill pill-ok" title="${esc(sync.last_success_at)}">` +
+      `synced ${timeAgo(sync.last_success_at)}</span>`;
+  }
+  return `<span class="pill">never synced</span>`;
+}
+
+// Collapsible list of the most recent failed jobs of any kind.
+function recentErrorsSection(a) {
+  const errors = a.recent_errors || [];
+  if (!errors.length) return "";
+  const rows = errors.map((e) => {
+    const at = e.finished_at || e.started_at;
+    return `<div class="problem-group">
+      <div class="actions">
+        <span class="pill pill-danger">${esc(e.kind)}</span>
+        <span class="muted mono" title="${esc(at || "")}">${timeAgo(at)}</span>
+      </div>
+      <div class="problem-err">${errCell(e.error, 160)}</div>
+    </div>`;
+  }).join("");
+  return `<details class="recent-errors">
+    <summary class="hint">Recent errors (${errors.length})</summary>
+    ${rows}
+  </details>`;
+}
+
 function accountPanel(a, running) {
   const jobs = a.recent_jobs || [];
-  const latest = jobs[0];
   const lastByKind = {};
   jobs.forEach((j) => { if (!lastByKind[j.kind]) lastByKind[j.kind] = j; });
 
@@ -295,6 +354,7 @@ function accountPanel(a, running) {
     : `<span class="pill pill-warn">import incomplete</span>`;
   const pausedPill = a.disabled_at
     ? `<span class="pill pill-warn">paused</span>` : "";
+  const healthPill = syncPill(a);
 
   const label = a.provider === "gmail"
     ? `${esc(a.email || "Gmail")} · Gmail`
@@ -305,7 +365,7 @@ function accountPanel(a, running) {
     : accountLabel(a.jmap_session_url);
   const header = `<div class="actions">
     <strong>${label}</strong>
-    ${statusPill}${pausedPill}
+    ${statusPill}${healthPill}${pausedPill}
     <span class="push muted mono">#${a.id} · ${a.recency_cutoff_days}-day cutoff · ${esc(a.deletion_policy)}</span>
   </div>`;
 
@@ -334,7 +394,8 @@ function accountPanel(a, running) {
       `<div class="actions"><span>${jobProgress(j, a)}</span>
         <button class="btn btn-sm" onclick="cancelJob(${j.job_id})">Cancel</button></div>`).join("");
   } else {
-    body += statusBanner(a, lastByKind, latest);
+    body += statusBanner(a, lastByKind);
+    body += recentErrorsSection(a);
     const primary = a.backfill_done
       ? `<button class="btn btn-primary" onclick="startJob(${a.id}, 'poll')">Check for new mail</button>`
       : "";
@@ -367,13 +428,17 @@ async function refreshStatus() {
     status.accounts.length ? panels
       : `<p class="empty">No accounts yet. Add a Fastmail or IMAP account, or connect Gmail or Microsoft 365 below to begin.</p>`;
 
-  // Auto-refresh while anything is running; stop when idle.
+  // Refresh every 5s while anything is running, every 60s when idle so
+  // scheduled (cron) sync results and "N min ago" labels stay current.
   const busy = (status.running_jobs || []).length > 0;
-  if (busy && !refreshTimer) {
-    refreshTimer = setInterval(refreshStatus, 5000);
-  } else if (!busy && refreshTimer) {
+  const wanted = busy ? 5000 : 60000;
+  if (refreshTimer && refreshTimerMs !== wanted) {
     clearInterval(refreshTimer);
     refreshTimer = null;
+  }
+  if (!refreshTimer) {
+    refreshTimer = setInterval(refreshStatus, wanted);
+    refreshTimerMs = wanted;
   }
 }
 
@@ -424,6 +489,22 @@ async function toggleGroup(accountId, idx) {
 }
 
 const shortDate = (ts) => String(ts || "").slice(0, 10);
+
+// Coarse relative time for dashboard labels; pair with a title attribute
+// carrying the absolute timestamp.
+function timeAgo(ts) {
+  if (!ts) return "never";
+  const then = new Date(ts).getTime();
+  if (Number.isNaN(then)) return String(ts);
+  const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (secs < 60) return "just now";
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `${hours} h ago`;
+  const days = Math.round(hours / 24);
+  return `${days} d ago`;
+}
 
 // Truncate raw text BEFORE escaping so an entity is never cut in half.
 function errCell(raw, cutoff) {

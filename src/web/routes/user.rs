@@ -87,6 +87,14 @@ async fn status(
     let running_jobs = jobs::running_for_user(&state.pool, user.id)
         .await
         .unwrap_or_default();
+    // Sync health for every account in one query, keyed by account id.
+    let sync_summaries: std::collections::HashMap<i64, jobs::SyncSummary> =
+        jobs::sync_summary_for_user(&state.pool, user.id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| (s.mail_account_id, s))
+            .collect();
     let mut out = Vec::new();
     for account in accounts {
         let counts = messages::counts(&state.pool, account.id)
@@ -138,6 +146,21 @@ async fn status(
         let recent_jobs = jobs::recent(&state.pool, account.id, 8)
             .await
             .unwrap_or_default();
+        let recent_errors = jobs::recent_failures(&state.pool, account.id, 5)
+            .await
+            .unwrap_or_default();
+        // Null when the account has never finished a poll or backfill.
+        let sync = sync_summaries.get(&account.id).map(|s| {
+            json!({
+                "last_success_at": s.last_success_at,
+                "last_attempt_at": s.last_attempt_at,
+                "last_attempt_finished_at": s.last_attempt_finished_at,
+                "last_attempt_kind": s.last_attempt_kind,
+                "last_attempt_status": s.last_attempt_status,
+                "last_attempt_error": s.last_attempt_error,
+                "consecutive_failures": s.consecutive_failures,
+            })
+        });
         out.push(json!({
             "id": account.id,
             "provider": account.provider,
@@ -159,6 +182,12 @@ async fn status(
             },
             "recent_jobs": recent_jobs.iter().map(|j| json!({
                 "kind": j.kind, "status": j.status,
+                "started_at": j.started_at, "finished_at": j.finished_at,
+                "error": j.error,
+            })).collect::<Vec<_>>(),
+            "sync": sync,
+            "recent_errors": recent_errors.iter().map(|j| json!({
+                "job_id": j.id, "kind": j.kind,
                 "started_at": j.started_at, "finished_at": j.finished_at,
                 "error": j.error,
             })).collect::<Vec<_>>(),

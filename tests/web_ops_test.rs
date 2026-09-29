@@ -266,9 +266,15 @@ async fn backfill_and_poll_run_entirely_through_the_api(pool: PgPool) {
     let final_status = h.wait_idle().await;
     assert_eq!(final_status["accounts"][0]["counts"]["total"], 6);
 
-    // Job history recorded.
+    // Job history recorded, and the dashboard reports a healthy sync.
     let recent = jobs::recent(&pool, h.account_id, 10).await.unwrap();
     assert!(recent.iter().filter(|j| j.status == "succeeded").count() >= 3);
+    let sync = &final_status["accounts"][0]["sync"];
+    assert!(sync["last_success_at"].is_string(), "{final_status}");
+    assert_eq!(sync["last_attempt_kind"], "poll");
+    assert_eq!(sync["last_attempt_status"], "succeeded");
+    assert_eq!(sync["consecutive_failures"], 0);
+    assert_eq!(final_status["accounts"][0]["recent_errors"], json!([]));
 }
 
 #[sqlx::test(migrator = "arkivo::db::MIGRATOR")]

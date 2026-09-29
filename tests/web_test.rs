@@ -1178,3 +1178,73 @@ async fn account_pause_toggles_via_patch_and_shows_in_status(pool: PgPool) {
         .unwrap();
     assert!(account.disabled_at.is_none());
 }
+
+/// A scheduled poll that fails is recorded only in the jobs table; the
+/// dashboard must surface it even after a newer job of another kind
+/// succeeds, and must report when the account last synced successfully.
+#[sqlx::test(migrator = "arkivo::db::MIGRATOR")]
+async fn status_surfaces_failed_sync_and_last_success(pool: PgPool) {
+    use arkivo::db::{accounts, jobs};
+
+    let h = WebHarness::start(pool.clone()).await;
+    let client = h.client();
+    let invite = make_invite(&pool, "user").await;
+    h.register(&client, &mut softtoken(), &invite, "alice")
+        .await;
+    let alice = users::get_by_handle(&pool, "alice").await.unwrap().unwrap();
+    let account = accounts::create(&pool, alice.id, "https://a.example/jmap", b"s", "k1")
+        .await
+        .unwrap();
+
+    let fetch_status = || async {
+        client
+            .get(format!("{}/api/status", h.base))
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap()
+    };
+
+    // No finished sync job yet.
+    let status = fetch_status().await;
+    assert!(status["accounts"][0]["sync"].is_null(), "{status}");
+    assert_eq!(status["accounts"][0]["recent_errors"], json!([]));
+
+    let ok = jobs::start(&pool, "poll", Some(account.id)).await.unwrap();
+    jobs::succeed(&pool, ok, &json!({})).await.unwrap();
+    let status = fetch_status().await;
+    let sync = &status["accounts"][0]["sync"];
+    assert!(sync["last_success_at"].is_string(), "{status}");
+    assert_eq!(sync["last_attempt_status"], "succeeded");
+    assert_eq!(sync["consecutive_failures"], 0);
+
+    let failed = jobs::start(&pool, "poll", Some(account.id)).await.unwrap();
+    jobs::fail(&pool, failed, "HTTP status 400: AADSTS500014 disabled")
+        .await
+        .unwrap();
+    // A later successful promote must not hide the failed poll.
+    let promote = jobs::start(&pool, "promote", Some(account.id))
+        .await
+        .unwrap();
+    jobs::succeed(&pool, promote, &json!({})).await.unwrap();
+
+    let status = fetch_status().await;
+    let account_json = &status["accounts"][0];
+    assert_eq!(account_json["recent_jobs"][0]["kind"], "promote");
+    let sync = &account_json["sync"];
+    assert_eq!(sync["last_attempt_status"], "failed", "{status}");
+    assert_eq!(sync["last_attempt_kind"], "poll");
+    assert_eq!(sync["consecutive_failures"], 1);
+    assert_eq!(
+        sync["last_attempt_error"],
+        "HTTP status 400: AADSTS500014 disabled"
+    );
+    assert!(sync["last_success_at"].is_string());
+    let errors = account_json["recent_errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0]["job_id"], failed);
+    assert_eq!(errors[0]["kind"], "poll");
+    assert_eq!(errors[0]["error"], "HTTP status 400: AADSTS500014 disabled");
+}

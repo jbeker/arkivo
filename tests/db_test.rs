@@ -699,3 +699,84 @@ async fn o365_account_state_and_folder_cursors_roundtrip(pool: PgPool) {
             .is_empty()
     );
 }
+
+#[sqlx::test(migrator = "db::MIGRATOR")]
+async fn sync_summary_reports_last_success_and_failure_streak(pool: PgPool) {
+    let account = account_fixture(&pool).await;
+
+    // Nothing finished yet: no summary row, no failures.
+    assert!(
+        jobs::sync_summary_for_user(&pool, account.user_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let ok = jobs::start(&pool, "poll", Some(account.id)).await.unwrap();
+    jobs::succeed(&pool, ok, &serde_json::json!({}))
+        .await
+        .unwrap();
+    let ok_job = jobs::recent(&pool, account.id, 1).await.unwrap().remove(0);
+
+    let f1 = jobs::start(&pool, "poll", Some(account.id)).await.unwrap();
+    jobs::fail(&pool, f1, "first failure").await.unwrap();
+    let f2 = jobs::start(&pool, "poll", Some(account.id)).await.unwrap();
+    jobs::fail(&pool, f2, "second failure").await.unwrap();
+
+    // A later successful promote must not mask the failing sync, and a
+    // failed promote must not count toward the sync failure streak.
+    let promote = jobs::start(&pool, "promote", Some(account.id))
+        .await
+        .unwrap();
+    jobs::succeed(&pool, promote, &serde_json::json!({}))
+        .await
+        .unwrap();
+    let bad_promote = jobs::start(&pool, "promote", Some(account.id))
+        .await
+        .unwrap();
+    jobs::fail(&pool, bad_promote, "index down").await.unwrap();
+    // A running job is ignored until it finishes.
+    let _running = jobs::start(&pool, "poll", Some(account.id)).await.unwrap();
+
+    let summaries = jobs::sync_summary_for_user(&pool, account.user_id)
+        .await
+        .unwrap();
+    assert_eq!(summaries.len(), 1);
+    let s = &summaries[0];
+    assert_eq!(s.mail_account_id, account.id);
+    assert_eq!(s.last_success_at, ok_job.finished_at);
+    assert_eq!(s.last_attempt_kind, "poll");
+    assert_eq!(s.last_attempt_status, "failed");
+    assert_eq!(s.last_attempt_error.as_deref(), Some("second failure"));
+    assert_eq!(s.consecutive_failures, 2);
+
+    let failures = jobs::recent_failures(&pool, account.id, 5).await.unwrap();
+    assert_eq!(
+        failures.iter().map(|j| j.id).collect::<Vec<_>>(),
+        vec![bad_promote, f2, f1],
+        "newest first, all kinds"
+    );
+    assert!(failures.iter().all(|j| j.status == "failed"));
+
+    // Another user's accounts are not visible.
+    let other = users::create(&pool, "bob", "user").await.unwrap();
+    assert!(
+        jobs::sync_summary_for_user(&pool, other.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // A fresh success resets the streak.
+    let ok2 = jobs::start(&pool, "poll", Some(account.id)).await.unwrap();
+    jobs::succeed(&pool, ok2, &serde_json::json!({}))
+        .await
+        .unwrap();
+    let s = jobs::sync_summary_for_user(&pool, account.user_id)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(s.last_attempt_status, "succeeded");
+    assert_eq!(s.consecutive_failures, 0);
+    assert!(s.last_success_at.unwrap() > ok_job.finished_at.unwrap());
+}

@@ -137,3 +137,86 @@ pub async fn recent(pool: &PgPool, mail_account_id: i64, limit: i64) -> Result<V
     .await?;
     Ok(jobs)
 }
+
+/// Most recent failed jobs of any kind for one account, newest first.
+/// Backs the dashboard's "recent errors" list, which must outlive newer
+/// successful jobs of other kinds (a succeeded promote should not hide a
+/// failed poll).
+pub async fn recent_failures(pool: &PgPool, mail_account_id: i64, limit: i64) -> Result<Vec<Job>> {
+    let jobs = sqlx::query_as!(
+        Job,
+        r#"select id, kind, mail_account_id, status, started_at, finished_at, stats, error
+           from jobs where mail_account_id = $1 and status = 'failed'
+           order by started_at desc limit $2"#,
+        mail_account_id,
+        limit,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(jobs)
+}
+
+/// Per-account mail-sync health derived from the `jobs` history. "Sync"
+/// means `poll` and `backfill`; promote/reindex do not touch the mailbox
+/// and are excluded. Accounts with no terminal sync job have no row.
+#[derive(Debug, Clone)]
+pub struct SyncSummary {
+    pub mail_account_id: i64,
+    /// `finished_at` of the newest succeeded sync job.
+    pub last_success_at: Option<DateTime<Utc>>,
+    /// The newest sync job that reached a terminal status, whatever it was.
+    pub last_attempt_at: DateTime<Utc>,
+    pub last_attempt_finished_at: Option<DateTime<Utc>>,
+    pub last_attempt_kind: String,
+    pub last_attempt_status: String,
+    pub last_attempt_error: Option<String>,
+    /// Failed sync jobs started after the last success (all of them when
+    /// there has never been a success). Zero when the last attempt succeeded.
+    pub consecutive_failures: i64,
+}
+
+/// One [`SyncSummary`] per account owned by `user_id` that has at least one
+/// finished sync job. Batched so the dashboard reads it in one round trip.
+pub async fn sync_summary_for_user(pool: &PgPool, user_id: i64) -> Result<Vec<SyncSummary>> {
+    let rows = sqlx::query_as!(
+        SyncSummary,
+        r#"with sync_jobs as (
+               select j.mail_account_id, j.kind, j.status, j.started_at, j.finished_at, j.error
+               from jobs j
+               join mail_accounts a on a.id = j.mail_account_id
+               where a.user_id = $1
+                 and j.kind in ('poll', 'backfill')
+                 and j.status <> 'running'
+           ),
+           last_success as (
+               select mail_account_id, max(finished_at) as at
+               from sync_jobs where status = 'succeeded'
+               group by mail_account_id
+           ),
+           last_attempt as (
+               select distinct on (mail_account_id)
+                      mail_account_id, kind, status, started_at, finished_at, error
+               from sync_jobs
+               order by mail_account_id, started_at desc
+           )
+           select la.mail_account_id as "mail_account_id!",
+                  ls.at as "last_success_at?",
+                  la.started_at as "last_attempt_at!",
+                  la.finished_at as "last_attempt_finished_at?",
+                  la.kind as "last_attempt_kind!",
+                  la.status as "last_attempt_status!",
+                  la.error as "last_attempt_error?",
+                  (select count(*) from sync_jobs f
+                    where f.mail_account_id = la.mail_account_id
+                      and f.status = 'failed'
+                      and f.started_at > coalesce(ls.at, '-infinity'::timestamptz))
+                      as "consecutive_failures!"
+           from last_attempt la
+           left join last_success ls on ls.mail_account_id = la.mail_account_id
+           order by la.mail_account_id"#,
+        user_id,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}

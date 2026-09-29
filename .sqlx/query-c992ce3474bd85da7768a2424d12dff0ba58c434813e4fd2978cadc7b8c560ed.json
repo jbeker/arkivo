@@ -1,0 +1,102 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with sync_jobs as (\n               select j.mail_account_id, j.kind, j.status, j.started_at, j.finished_at, j.error\n               from jobs j\n               join mail_accounts a on a.id = j.mail_account_id\n               where a.user_id = $1\n                 and j.kind in ('poll', 'backfill')\n                 and j.status <> 'running'\n           ),\n           last_success as (\n               select mail_account_id, max(finished_at) as at\n               from sync_jobs where status = 'succeeded'\n               group by mail_account_id\n           ),\n           last_attempt as (\n               select distinct on (mail_account_id)\n                      mail_account_id, kind, status, started_at, finished_at, error\n               from sync_jobs\n               order by mail_account_id, started_at desc\n           )\n           select la.mail_account_id as \"mail_account_id!\",\n                  ls.at as \"last_success_at?\",\n                  la.started_at as \"last_attempt_at!\",\n                  la.finished_at as \"last_attempt_finished_at?\",\n                  la.kind as \"last_attempt_kind!\",\n                  la.status as \"last_attempt_status!\",\n                  la.error as \"last_attempt_error?\",\n                  (select count(*) from sync_jobs f\n                    where f.mail_account_id = la.mail_account_id\n                      and f.status = 'failed'\n                      and f.started_at > coalesce(ls.at, '-infinity'::timestamptz))\n                      as \"consecutive_failures!\"\n           from last_attempt la\n           left join last_success ls on ls.mail_account_id = la.mail_account_id\n           order by la.mail_account_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "mail_account_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "mail_account_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "last_success_at?",
+        "type_info": "Timestamptz",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_attempt_at!",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "started_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "last_attempt_finished_at?",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "finished_at"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "last_attempt_kind!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "last_attempt_status!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "last_attempt_error?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "error"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "consecutive_failures!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      null,
+      false,
+      true,
+      false,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "c992ce3474bd85da7768a2424d12dff0ba58c434813e4fd2978cadc7b8c560ed"
+}
